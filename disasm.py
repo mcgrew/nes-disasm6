@@ -2,14 +2,16 @@
 
 from enum import Enum
 from collections import OrderedDict
-from sys import argv, stdout
+from sys import argv, stdout, stderr
 from io import StringIO
+from os import urandom
+from base64 import b32encode
 
-def to_hex(*bytes_:bytes):
+def to_hex(bytes_:bytes):
     return ' '.join([f'{x:02x}' for x in bytes_])
 
-def table(*bytes_:bytes):
-    return '.hex ' + to_hex(*bytes_)
+def table(bytes_:bytes):
+    return '.hex ' + to_hex(bytes_)
 
 class OpType(Enum):
     IMPLIED, IMMMEDIATE, ACCUMULATOR, BRANCH, ZEROPAGE, ABSOLUTE, INDIRECT = range(7)
@@ -21,13 +23,15 @@ class Indexing(Enum):
         return self.value
 
 class Instruction:
-    def __init__(self, position, *_bytes):
+    def __init__(self, position, bank, _bytes):
         self.position = position
         self.opcode = _bytes[0]
+        self._bytes = bytes(_bytes)
         b1 = _bytes[1] if len(_bytes) > 1 else None
         b2 = _bytes[2] if len(_bytes) > 2 else None
         self._size = 0
-        self.label = 0
+        self.label = False
+        self._tag = ''
 
         self.op = ''
         self.comment = ''
@@ -61,8 +65,6 @@ class Instruction:
 
         elif b1 is not None and self.branch(self.opcode):
             self.type = OpType.BRANCH
-            dest = self.position + 2 + (b1 if b1 < 128 else b1 - 256)
-            self.label = dest
             self._size = 2
 
         elif b2 is not None and self.absolute(self.opcode):
@@ -74,7 +76,7 @@ class Instruction:
         if self.op:
             self.comment = f'{self.position:04X}:  ' + \
                 ' '.join([f'{x:02x}' for x in _bytes[:self._size]])
-        self.bytes = bytes(_bytes[:self._size])
+        self._bytes = self._bytes[:self._size]
 
     def implied(self, opcode):
         if opcode & 0xf == 0x8:
@@ -115,10 +117,11 @@ class Instruction:
         if opcode in (0x9c, 0x9e):
             return False
         zp = self.zeropage(opcode - 8)
-        if opcode == 0x20:
-            self.op = 'jsr'
-        if opcode == 0x4c:
-            self.op = 'jmp'
+        if self._bytes[2] >= 0x80: # don't interpret jumps below 0x8000
+            if opcode == 0x20:
+                self.op = 'jsr'
+            if opcode == 0x4c:
+                self.op = 'jmp'
         if self.opcode:
             return True
         return False
@@ -138,8 +141,8 @@ class Instruction:
     def immediate(self, opcode):
         if opcode & 0x1f == 0x09:
             self.op = ('ora', 'and', 'eor', 'adc', '', 'lda', 'cmp', 'sbc')[opcode >> 5]
-        if opcode & 0x8f == 0x80:
-            self.op = ('', 'ldy', 'cpy', 'cpx')[(opcode & ~0x80) >> 5]
+        if opcode & 0x9f == 0x80:
+            self.op = ('', 'ldy', 'cpy', 'cpx')[(opcode >> 5) - 8]
         if opcode == 0xa2:
             self.op = 'ldx'
         if self.op:
@@ -153,107 +156,170 @@ class Instruction:
             return True
         return False
 
+    def get_tag(self):
+        if not self._tag:
+            self._tag = b32encode(urandom(5)).lower()
+
     def __bool__(self):
         return bool(self.op)
 
     def __len__(self):
         return self._size
 
+    def __bytes__(self):
+        return self._bytes
+
     def __str__(self):
         if not self.op:
             return ''
-        b1 = self.bytes[1] if len(self.bytes) > 1 else None
-        b2 = self.bytes[2] if len(self.bytes) > 2 else None
-        ret = ' ' * 12 
+        b1 = self._bytes[1] if len(self._bytes) > 1 else None
+        b2 = self._bytes[2] if len(self._bytes) > 2 else None
+        buf = StringIO()
+        if self.pre_comment:
+            buf.write(f';           {self.pre_comment}\n')
+        buf.write(' ' * 12)
+        line_len = buf.tell()
         if self.type == OpType.IMPLIED:
-            ret += self.op
+            buf.write(self.op)
         if self.type == OpType.ACCUMULATOR:
-            ret += f'{self.op} a'
+            buf.write(f'{self.op} a')
         if self.type == OpType.IMMMEDIATE:
-                ret += f'{self.op} #${b1:02x}'
+                buf.write(f'{self.op} #${b1:02x}')
         if self.type == OpType.BRANCH:
-            ret += f'bpl ${self.label:x}'
+            dest = self.position + 2 + (b1 if b1 < 128 else b1 - 256)
+            buf.write(f'{self.op} ${dest:x}')
         if self.type == OpType.ZEROPAGE:
             if self.indexing == Indexing.NONE:
-                ret += f'{self.op} ${b1:02x}'
+                buf.write(f'{self.op} ${b1:02x}')
             else:
-                ret += f'{self.op} ${b1:02x}, {self.indexing}'
+                buf.write(f'{self.op} ${b1:02x},{self.indexing}')
         if self.type == OpType.ABSOLUTE:
             if not b2:
-                ret = ret[:-4]
-                ret += f'.hex {self.opcode:02x} {b1:02x} {b2:02x}'
+                buf.seek(buf.tell()-4)
+                buf.write(f'.hex {self.opcode:02x} {b1:02x} {b2:02x}')
             elif self.indexing == Indexing.NONE:
-                ret += f'{self.op} ${b2:02x}{b1:02x}'
+                buf.write(f'{self.op} ${b2:02x}{b1:02x}')
             elif self.indexing == Indexing.X:
-                ret += f'{self.op} (${b2:02x}{b1:02x}, x)'
+                buf.write(f'{self.op} ${b2:02x}{b1:02x},x')
             elif self.indexing == Indexing.Y:
-                ret += f'{self.op} (${b2:02x}{b1:02x}), y'
+                buf.write(f'{self.op} ${b2:02x}{b1:02x},y')
 
         if self.type == OpType.INDIRECT:
             if self.op == 'jmp':
-                ret += f'{self.op} (${b2:02x}{b1:02x})'
+                buf.write(f'{self.op} (${b2:02x}{b1:02x})')
             elif self.indexing == Indexing.NONE:
-                ret += f'{self.op} ${b1:02x}'
+                buf.write(f'{self.op} ${b1:02x}')
             elif self.indexing == Indexing.X:
-                ret += f'{self.op} (${b1:02x}, x)'
+                buf.write(f'{self.op} (${b1:02x},x)')
             elif self.indexing == Indexing.Y:
-                ret += f'{self.op} (${b1:02x}), y'
+                buf.write(f'{self.op} (${b1:02x}),y')
 
         if self.comment:
-            ret = f'{ret:28s}; {self.comment}'
-        if self.pre_comment:
-            ret = f';           {self.pre_comment}\n{ret}'
-        ret += '\n'
+            buf.write(' ' * (28 + line_len - buf.tell()))
+            buf.write(f'; {self.comment}')
+        buf.write('\n')
 
-        return ret
+        buf.seek(0)
+        return buf.read()
 
     def __add__(self, instr):
-        s = Subroutine(self.position)
+        s = Subroutine(self.bank, self.position)
         s.append(self)
         s.append(instr)
         return s
 
 
 class Bank:
-    def __init__(self, number:int, base:int, *_bytes:bytes):
-        self.bytes = _bytes
-        self.base = base
+    def __init__(self, number:int, base:int, _bytes:bytes):
+        self._bytes = bytes(_bytes)
+        self.base = base if base else 0x8000
+        self.bank = number
         self.components = []
         self.disassemble(_bytes[:-6], _bytes[-6:])
         i = 0
+        if not base:
+            old_base = self.base
+            new_base = self.find_base()
+            # use the jump addresses to guess the base address of this bank
+            if new_base != old_base:
+                # it changed, so redo the disassembly
+                self.base = new_base
+                self.disassemble(_bytes[:-6], _bytes[-6:])
 
-    def disassemble(self, bank_bytes, interrupts):
+    def disassemble(self, bank_bytes:bytes, interrupts:bytes=bytes()):
+        self.components.clear()
         last_instr = i = 0
         while i < len(bank_bytes):
-            instr = Instruction(i + self.base, *bank_bytes[i:i+3])
+            instr = Instruction(i + self.base, self.bank, bank_bytes[i:i+3])
             if instr:
                 if not len(self.components) or type(self.components[-1]) is not Subroutine \
                         or self.components[-1].is_valid():
-                    self.components.append(Subroutine(instr.position))
+                    self.components.append(Subroutine(self.bank, instr.position))
                 self.components[-1].append(instr)
                 i += len(instr)
             else:
                 if len(self.components) and type(self.components[-1]) is Subroutine:
                     self.merge_tables()
                 if not len(self.components) or type(self.components[-1]) is not Table:
-                    self.components.append(Table(i + self.base))
-                self.components[-1].extend(bank_bytes[i])
+                    self.components.append(Table(i + self.base, self.bank))
+                self.components[-1].append(bank_bytes[i])
                 i += 1
-        self.components.append(Word(*interrupts[:2], 'NMI'))
-        self.components.append(Word(*interrupts[2:4], 'RESET'))
-        self.components.append(Word(*interrupts[4:], 'IRQ'))
+        if len(interrupts):
+            nmi = Word(*interrupts[:2], 'NMI')
+            reset = Word(*interrupts[2:4], 'RESET')
+            irq = Word(*interrupts[4:], 'IRQ')
+            if self._valid_interrupts(nmi, reset, irq):
+                self.components.append(nmi)
+                self.components.append(reset)
+                self.components.append(irq)
+            else:
+                if type(self.components[-1]) is Table:
+                    t = self.components[-1]
+                else:
+                    t = Table(self.base + len(bank_bytes), self.bank)
+                    self.components.append(t)
+                t.extend(nmi)
+                t.extend(reset)
+                t.extend(irq)
+
+    def _valid_interrupts(self, nmi, reset, irq):
+        if nmi.addr < 0x8000 or reset.addr < 0x8000 or irq.addr < 0x8000:
+            return False
+        if nmi.addr >= 0xfffa or reset.addr >= 0xfffa or irq.addr >= 0xfffa:
+            return False
+        return True
 
     def merge_tables(self):
         if len(self.components):
             c = self.components[-1]
             if not c.is_valid():
-                self.components[-1] = Table(c.position, *c.bytes())
+                self.components[-1] = Table(c.position, self.bank, c)
                 while len(self.components) > 1 and type(self.components[-2]) is Table:
-                    self.components[-2] += self.components[-1]
+                    self.components[-2].extend(self.components[-1])
                     self.components = self.components[:-1]
 
     def find_base(self):
-        pass
+        """
+        Attempts to find the base address based on jump addresses in this bank.
+        """
+        base_8 = 0
+        base_c = 0
+        if type(self.components[-1]) is not Word:
+            return 0x8000
+        for c in self.components:
+            if type(c) is Subroutine:
+                for i in c.instructions:
+                    if i.op in ('jmp', 'jsr') and i.type == OpType.ABSOLUTE:
+                        b1, b2, _ = bytes(i)
+                        jpoint = b2 << 8 | b1
+                        if jpoint > 0xc000:
+                            base_c += 1
+                        elif jpoint > 0x8000:
+                            base_8 += 1
+        return 0xc000 if base_c > base_8 else 0x8000
+
+    def __bytes__(self):
+        return self._bytes
 
     def __str__(self):
         buf = StringIO()
@@ -263,36 +329,30 @@ class Bank:
         buf.seek(0)
         return buf.read()
 
-class Base:
-    def __init__(self, base:int):
-        self.base = base
-
-    def __str__(self):
-        return f'.base ${self.base:04x}\n'
-
 class Subroutine:
-    def __init__(self, position:int):
+    def __init__(self, bank, position:int):
         self.position = position
         self.instructions = []
+        self.bank = bank
 
     def is_valid(self):
-        return self.instructions[-1].op in ('rts', 'jmp')
+        return len(self.instructions) > 1 and self.instructions[-1].op in ('rts', 'jmp')
 
     def append(self, instruction:Instruction):
         self.instructions.append(instruction)
 
-    def bytes(self):
+    def __bytes__(self):
         ret = bytes()
         for i in self.instructions:
-            ret += i.bytes
-        return bytes(ret)
+            ret += bytes(i)
+        return ret
 
     def __len__(self):
         return sum([len(i) for i in self.instructions])
 
     def __str__(self):
         buf = StringIO()
-        buf.write(f'sub_{self.position:04x}:\n')
+        buf.write(f'sub_b{self.bank}_{self.position:04x}:\n')
         for i in self.instructions:
             buf.write(str(i))
         buf.seek(0)
@@ -300,56 +360,97 @@ class Subroutine:
 
 
 class Table:
-    def __init__(self, position:int, *_bytes:bytes):
-        self.bytes = bytes(_bytes)
+    def __init__(self, position:int, bank:int, _bytes:bytes=bytes()):
+        self._bytes = bytes(_bytes)
         self.position = position
+        self.bank = bank
 
-    def extend(self, *_bytes:bytes):
-        self.bytes += bytes(_bytes)
+    def append(self, byte:int):
+        self._bytes += bytes((byte,))
 
-    def __add__(self, obj):
-        if not hasattr(obj, 'bytes'):
-            raise TypeError("unsupported operand type(s) for +: "
-                    f"'{type(self).__name__}' and '{type(obj).__name__}'")
-        if callable(obj.bytes):
-            return Table(self.position, *(self.bytes + obj.bytes()))
-        return Table(self.position, *(self.bytes + obj.bytes))
+    def extend(self, _bytes):
+        self._bytes += bytes(_bytes)
+
+#     def __add__(self, obj):
+#         return Table(self.position, self.bank, (self._bytes + bytes(obj)))
+
+    def __bytes__(self):
+        return self._bytes
 
     def __str__(self):
         buf = StringIO()
-        buf.write(f'tab_{self.position:04x}:\n')
-        for i in range(0, len(self.bytes), 16):
+        buf.write(f'tab_b{self.bank}_{self.position:04x}:\n')
+        last_line = buf.tell()
+        for i in range(0, len(self._bytes), 16):
             buf.write(' ' * 8)
-            buf.write(f'.hex {" ".join([f"{x:02x}" for x in self.bytes[i:i+16]])}\n')
+            buf.write(f'.hex {" ".join([f"{x:02x}" for x in self._bytes[i:i+16]])}')
+            buf.write(' ' * (60 + last_line - buf.tell()))
+            buf.write(f'  ; {self.position + i:04X}\n')
+            last_line = buf.tell()
         buf.seek(0)
         return buf.read()
 
     def __len__(self):
-        return len(self.bytes)
+        return len(self._bytes)
 
 class Word:
     def __init__(self, b1, b2, comment):
         self.b1 = b1
         self.b2 = b2
+        self.addr = b2 << 8 | b1
         self.comment = comment
 
+    def __bytes__(self):
+        return bytes((self.b1, self.b2))
+
     def __str__(self):
-        return f'        .word ${self.b2:02x}{self.b1:02x}         ' \
+        return f'        .word ${self.addr:04x}         ' \
                 f'; {self.comment:10s}{self.b1:02x} {self.b2:02x}\n'
 
     def __len__(self):
         return 2
 
+class Header:
+    def __init__(self, _bytes:bytes):
+        self._bytes = bytes(_bytes)
+        self.mapper = (_bytes[6] >> 4) | (_bytes[7] * 0xf0)
+
+    def __str__(self):
+        buf = StringIO()
+        buf.write(f';  HEADER - MAPPER {self.mapper}\n')
+        buf.write('        .db "NES", $1a\n')
+        buf.write(f'        .db {self._bytes[ 4]:d}  ; PRG ROM banks\n')
+        buf.write(f'        .db {self._bytes[ 5]:d}  ; CHR ROM banks\n')
+        buf.write(f'        .db ${self._bytes[ 6]:02x} ; Mapper, mirroring, battery, trainer\n')
+        buf.write(f'        .db ${self._bytes[ 7]:02x} ; Mapper, VS/Playchoice, NES 2.0 Header\n')
+        buf.write(f'        .db {self._bytes[ 8]:d}  ; PRG-RAM size (rarely used)\n')
+        buf.write(f'        .db {self._bytes[ 9]:d}  ; TV system (rarely used)\n')
+        buf.write(f'        .db {self._bytes[10]:d}  ; TV system, PRG-RAM presense (unofficial, rarely used)\n')
+        buf.write(' ' * 8)
+        buf.write(f'.db ' + ', '.join([f'${x:02X}' for x in self._bytes[11:16]]) + ' ; Unused padding')
+        buf.seek(0)
+        return buf.read()
+
+    def __bytes__(self):
+        return self._bytes
 
 def main():
     banks = []
     with open(argv[1], 'rb') as f:
-        header = f.read(16)
-        for i in range(header[4]):
+        header = Header(f.read(16))
+        for i in range(bytes(header)[4]):
             rom = f.read(16384)
-            banks.append(Bank(0, 0x8000, *rom))
+            if i == bytes(header)[4]-1: # is the last bank always base $C000?
+                banks.append(Bank(i, 0xc000, rom))
+            else:
+                banks.append(Bank(i, 0, rom))
+        incbin = f.read()
+    print(header)
     for b in banks:
         print(b)
+    with open('chr_rom.bin', 'wb') as chr_rom:
+        chr_rom.write(incbin)
+    print('.incbin chr_rom.bin')
 
 if __name__ == '__main__':
     main()
