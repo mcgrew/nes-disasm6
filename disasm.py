@@ -22,16 +22,143 @@ class Indexing(Enum):
     def __str__(self):
         return self.value
 
+class Bank:
+    def __init__(self, number:int, base:int, _bytes:bytes):
+        self._bytes = bytes(_bytes)
+        self.base = base if base else 0x8000
+        self.number = number
+        self.components = []
+        self.disassemble(_bytes[:-6], _bytes[-6:])
+        i = 0
+        if not base:
+            old_base = self.base
+            new_base = self.find_base()
+            # use the jump addresses to guess the base address of this bank
+            if new_base != old_base:
+                # it changed, so redo the disassembly
+                self.base = new_base
+                self.disassemble(_bytes[:-6], _bytes[-6:])
+        self._add_labels()
+
+    def disassemble(self, bank_bytes:bytes, interrupts:bytes=bytes()):
+        self.components.clear()
+        last_instr = i = 0
+        while i < len(bank_bytes):
+            instr = Instruction(i + self.base, self, bank_bytes[i:i+3])
+            if instr:
+                if not len(self.components) or type(self.components[-1]) is not Subroutine \
+                        or self.components[-1].is_valid():
+                    self.components.append(Subroutine(self, instr.position))
+                self.components[-1].append(instr)
+                i += len(instr)
+            else:
+                if len(self.components) and type(self.components[-1]) is Subroutine:
+                    self.merge_tables()
+                if not len(self.components) or type(self.components[-1]) is not Table:
+                    self.components.append(Table(i + self.base, self))
+                self.components[-1].append(bank_bytes[i])
+                i += 1
+        if len(interrupts):
+            nmi = Word(0xffa, *interrupts[:2], 'NMI')
+            reset = Word(0xffc, *interrupts[2:4], 'RESET')
+            irq = Word(0xffe, *interrupts[4:], 'IRQ')
+            if self._valid_interrupts(nmi, reset, irq):
+                self.components.append(nmi)
+                self.components.append(reset)
+                self.components.append(irq)
+            else:
+                if type(self.components[-1]) is Table:
+                    t = self.components[-1]
+                else:
+                    t = Table(self.base + len(bank_bytes), self)
+                    self.components.append(t)
+                t.extend(nmi)
+                t.extend(reset)
+                t.extend(irq)
+
+    def _valid_interrupts(self, nmi, reset, irq):
+        if nmi.addr < 0x8000 or reset.addr < 0x8000 or irq.addr < 0x8000:
+            return False
+        if nmi.addr >= 0xfffa or reset.addr >= 0xfffa or irq.addr >= 0xfffa:
+            return False
+        return True
+
+    def merge_tables(self):
+        if len(self.components):
+            c = self.components[-1]
+            if not c.is_valid():
+                self.components[-1] = Table(c.position, self, c)
+                while len(self.components) > 1 and type(self.components[-2]) is Table:
+                    self.components[-2].extend(self.components[-1])
+                    self.components = self.components[:-1]
+
+    def _add_labels(self):
+        for c in self.components:
+            if type(c) is Subroutine:
+                for i in c.instructions:
+                    if i.type == OpType.BRANCH:
+                        b1 = bytes(i)[1]
+                        dest = i.position + 2 + (b1 if b1 < 128 else b1 - 256)
+                        target = self.find_instr(dest)
+                        if target:
+                            i.dest = target.get_label()
+                    elif i.op == 'jmp' and i.type == OpType.ABSOLUTE:
+                        dest = bytes(i)[2] << 8 | bytes(i)[1]
+                        target = self.find_instr(dest)
+                        if target:
+                            i.dest = target.get_label()
+
+
+    def find_instr(self, position) -> 'Instruction':
+        for c in self.components:
+            if type(c) is Subroutine:
+                for i in c.instructions:
+                    if i.position == position:
+                        return i
+        return None
+
+    def find_base(self):
+        """
+        Attempts to find the base address based on jump addresses in this bank.
+        """
+        base_8 = 0
+        base_c = 0
+        if type(self.components[-1]) is not Word:
+            return 0x8000
+        for c in self.components:
+            if type(c) is Subroutine:
+                for i in c.instructions:
+                    if i.op in ('jmp', 'jsr') and i.type == OpType.ABSOLUTE:
+                        b1, b2, _ = bytes(i)
+                        jpoint = b2 << 8 | b1
+                        if jpoint > 0xc000:
+                            base_c += 1
+                        elif jpoint > 0x8000:
+                            base_8 += 1
+        return 0xc000 if base_c > base_8 else 0x8000
+
+    def __bytes__(self):
+        return self._bytes
+
+    def __str__(self):
+        buf = StringIO()
+        buf.write(f'.base ${self.base:04x}\n\n')
+        for c in self.components:
+            buf.write(str(c))
+        buf.seek(0)
+        return buf.read()
+
 class Instruction:
-    def __init__(self, position, bank, _bytes):
+    def __init__(self, position:int, bank:Bank, _bytes:bytes):
         self.position = position
         self.opcode = _bytes[0]
+        self.bank = bank
         self._bytes = bytes(_bytes)
         b1 = _bytes[1] if len(_bytes) > 1 else None
         b2 = _bytes[2] if len(_bytes) > 2 else None
         self._size = 0
-        self.label = False
-        self._tag = ''
+        self.label = ''
+        self.dest = ''
 
         self.op = ''
         self.comment = ''
@@ -66,11 +193,15 @@ class Instruction:
         elif b1 is not None and self.branch(self.opcode):
             self.type = OpType.BRANCH
             self._size = 2
+            self.dest = f'${position + 2 + (b1 if b1 < 128 else b1 - 256):04X}'
 
         elif b2 is not None and self.absolute(self.opcode):
             self.type = OpType.ABSOLUTE
             if not b2:
-                self.pre_comment = f'{self.op} ${b2:02x}{b1:02x}'
+                if self.indexing == Indexing.NONE:
+                    self.pre_comment = f'{self.op} ${b2:02x}{b1:02x}'
+                else:
+                    self.pre_comment = f'{self.op} ${b2:02x}{b1:02x},{self.indexing}'
             self._size = 3
 
         if self.op:
@@ -102,7 +233,7 @@ class Instruction:
             self.op = ('asl', 'rol', 'lsr', 'ror', 'stx', 'ldx', 'dec', 'inc')[opcode >> 5]
         if opcode == 0x24:
             self.op = 'bit'
-        if opcode in (0x84, 0x94, 0xa4, 0xc4, 0xe4):
+        if opcode in (0x84, 0x94, 0xa4, 0xb4, 0xc4, 0xe4):
             self.op = ('sty', 'ldy', 'cpy', 'cpx')[(opcode >> 5) - 8]
 
         if self.op:
@@ -116,13 +247,26 @@ class Instruction:
     def absolute(self, opcode):
         if opcode in (0x9c, 0x9e):
             return False
-        zp = self.zeropage(opcode - 8)
         if self._bytes[2] >= 0x80: # don't interpret jumps below 0x8000
             if opcode == 0x20:
                 self.op = 'jsr'
             if opcode == 0x4c:
                 self.op = 'jmp'
-        if self.opcode:
+        if opcode & 0x1f == 0x19:
+            self.op = ('ora', 'and', 'eor', 'adc', 'sta', 'lda', 'cmp', 'sbc')[opcode >> 5]
+        if opcode & 0xf == 0xd:
+            self.op = ('ora', 'and', 'eor', 'adc', 'sta', 'lda', 'cmp', 'sbc')[opcode >> 5]
+        if opcode & 0xf == 0xe:
+            self.op = ('asl', 'rol', 'lsr', 'ror', 'stx', 'ldx', 'dec', 'inc')[opcode >> 5]
+        if opcode == 0x2c:
+            self.op = 'bit'
+        if opcode in (0x8c, 0xac, 0xbc, 0xcc, 0xec):
+            self.op = ('sty', 'ldy', 'cpy', 'cpx')[(opcode >> 5) - 8]
+        if self.op:
+            if opcode & 0x10 == 0x10:
+                self.indexing = Indexing.X
+            if opcode == 0xbe or opcode & 0x1f == 0x19:
+                self.indexing = Indexing.Y
             return True
         return False
 
@@ -156,9 +300,11 @@ class Instruction:
             return True
         return False
 
-    def get_tag(self):
-        if not self._tag:
-            self._tag = b32encode(urandom(5)).lower()
+    def get_label(self):
+#         if not self._tag:
+#             self._tag = '_' + b32encode(urandom(5)).decode('utf-8').lower()
+        self.label = f'b{self.bank.number}_{self.position:04x}'
+        return self.label
 
     def __bool__(self):
         return bool(self.op)
@@ -177,7 +323,10 @@ class Instruction:
         buf = StringIO()
         if self.pre_comment:
             buf.write(f';           {self.pre_comment}\n')
-        buf.write(' ' * 12)
+        if self.label:
+            buf.write(f'{self.label}:'.ljust(12))
+        else:
+            buf.write(' ' * 12)
         line_len = buf.tell()
         if self.type == OpType.IMPLIED:
             buf.write(self.op)
@@ -186,23 +335,22 @@ class Instruction:
         if self.type == OpType.IMMMEDIATE:
                 buf.write(f'{self.op} #${b1:02x}')
         if self.type == OpType.BRANCH:
-            dest = self.position + 2 + (b1 if b1 < 128 else b1 - 256)
-            buf.write(f'{self.op} ${dest:x}')
+            buf.write(f'{self.op} {self.dest}')
         if self.type == OpType.ZEROPAGE:
             if self.indexing == Indexing.NONE:
                 buf.write(f'{self.op} ${b1:02x}')
             else:
                 buf.write(f'{self.op} ${b1:02x},{self.indexing}')
         if self.type == OpType.ABSOLUTE:
-            if not b2:
+            if self.op == 'jmp' and self.dest:
+                buf.write(f'{self.op} {self.dest}')
+            elif not b2:
                 buf.seek(buf.tell()-4)
                 buf.write(f'.hex {self.opcode:02x} {b1:02x} {b2:02x}')
             elif self.indexing == Indexing.NONE:
                 buf.write(f'{self.op} ${b2:02x}{b1:02x}')
-            elif self.indexing == Indexing.X:
-                buf.write(f'{self.op} ${b2:02x}{b1:02x},x')
-            elif self.indexing == Indexing.Y:
-                buf.write(f'{self.op} ${b2:02x}{b1:02x},y')
+            else:
+                buf.write(f'{self.op} ${b2:02x}{b1:02x},{self.indexing}')
 
         if self.type == OpType.INDIRECT:
             if self.op == 'jmp':
@@ -228,115 +376,15 @@ class Instruction:
         s.append(instr)
         return s
 
-
-class Bank:
-    def __init__(self, number:int, base:int, _bytes:bytes):
-        self._bytes = bytes(_bytes)
-        self.base = base if base else 0x8000
-        self.bank = number
-        self.components = []
-        self.disassemble(_bytes[:-6], _bytes[-6:])
-        i = 0
-        if not base:
-            old_base = self.base
-            new_base = self.find_base()
-            # use the jump addresses to guess the base address of this bank
-            if new_base != old_base:
-                # it changed, so redo the disassembly
-                self.base = new_base
-                self.disassemble(_bytes[:-6], _bytes[-6:])
-
-    def disassemble(self, bank_bytes:bytes, interrupts:bytes=bytes()):
-        self.components.clear()
-        last_instr = i = 0
-        while i < len(bank_bytes):
-            instr = Instruction(i + self.base, self.bank, bank_bytes[i:i+3])
-            if instr:
-                if not len(self.components) or type(self.components[-1]) is not Subroutine \
-                        or self.components[-1].is_valid():
-                    self.components.append(Subroutine(self.bank, instr.position))
-                self.components[-1].append(instr)
-                i += len(instr)
-            else:
-                if len(self.components) and type(self.components[-1]) is Subroutine:
-                    self.merge_tables()
-                if not len(self.components) or type(self.components[-1]) is not Table:
-                    self.components.append(Table(i + self.base, self.bank))
-                self.components[-1].append(bank_bytes[i])
-                i += 1
-        if len(interrupts):
-            nmi = Word(*interrupts[:2], 'NMI')
-            reset = Word(*interrupts[2:4], 'RESET')
-            irq = Word(*interrupts[4:], 'IRQ')
-            if self._valid_interrupts(nmi, reset, irq):
-                self.components.append(nmi)
-                self.components.append(reset)
-                self.components.append(irq)
-            else:
-                if type(self.components[-1]) is Table:
-                    t = self.components[-1]
-                else:
-                    t = Table(self.base + len(bank_bytes), self.bank)
-                    self.components.append(t)
-                t.extend(nmi)
-                t.extend(reset)
-                t.extend(irq)
-
-    def _valid_interrupts(self, nmi, reset, irq):
-        if nmi.addr < 0x8000 or reset.addr < 0x8000 or irq.addr < 0x8000:
-            return False
-        if nmi.addr >= 0xfffa or reset.addr >= 0xfffa or irq.addr >= 0xfffa:
-            return False
-        return True
-
-    def merge_tables(self):
-        if len(self.components):
-            c = self.components[-1]
-            if not c.is_valid():
-                self.components[-1] = Table(c.position, self.bank, c)
-                while len(self.components) > 1 and type(self.components[-2]) is Table:
-                    self.components[-2].extend(self.components[-1])
-                    self.components = self.components[:-1]
-
-    def find_base(self):
-        """
-        Attempts to find the base address based on jump addresses in this bank.
-        """
-        base_8 = 0
-        base_c = 0
-        if type(self.components[-1]) is not Word:
-            return 0x8000
-        for c in self.components:
-            if type(c) is Subroutine:
-                for i in c.instructions:
-                    if i.op in ('jmp', 'jsr') and i.type == OpType.ABSOLUTE:
-                        b1, b2, _ = bytes(i)
-                        jpoint = b2 << 8 | b1
-                        if jpoint > 0xc000:
-                            base_c += 1
-                        elif jpoint > 0x8000:
-                            base_8 += 1
-        return 0xc000 if base_c > base_8 else 0x8000
-
-    def __bytes__(self):
-        return self._bytes
-
-    def __str__(self):
-        buf = StringIO()
-        buf.write(f'.base ${self.base:04x}\n\n')
-        for c in self.components:
-            buf.write(str(c))
-        buf.seek(0)
-        return buf.read()
-
 class Subroutine:
-    def __init__(self, bank, position:int):
+    def __init__(self, bank:Bank, position:int):
         self.position = position
         self.instructions = []
         self.bank = bank
 
     def is_valid(self):
-        return len(self.instructions) > 1 and self.instructions[-1].op in ('rts', 'jmp')
+#         return len(self.instructions) > 1 and self.instructions[-1].op in ('rts', 'jmp')
+        return self.instructions[-1].op in ('rts', 'jmp')
 
     def append(self, instruction:Instruction):
         self.instructions.append(instruction)
@@ -352,15 +400,14 @@ class Subroutine:
 
     def __str__(self):
         buf = StringIO()
-        buf.write(f'sub_b{self.bank}_{self.position:04x}:\n')
+#         buf.write(f'sub_b{self.bank.number}_{self.position:04x}:\n')
         for i in self.instructions:
             buf.write(str(i))
         buf.seek(0)
         return buf.read()
 
-
 class Table:
-    def __init__(self, position:int, bank:int, _bytes:bytes=bytes()):
+    def __init__(self, position:int, bank:Bank, _bytes:bytes=bytes()):
         self._bytes = bytes(_bytes)
         self.position = position
         self.bank = bank
@@ -371,15 +418,12 @@ class Table:
     def extend(self, _bytes):
         self._bytes += bytes(_bytes)
 
-#     def __add__(self, obj):
-#         return Table(self.position, self.bank, (self._bytes + bytes(obj)))
-
     def __bytes__(self):
         return self._bytes
 
     def __str__(self):
         buf = StringIO()
-        buf.write(f'tab_b{self.bank}_{self.position:04x}:\n')
+        buf.write(f'tab_b{self.bank.number}_{self.position:04x}:\n')
         last_line = buf.tell()
         for i in range(0, len(self._bytes), 16):
             buf.write(' ' * 8)
@@ -394,7 +438,8 @@ class Table:
         return len(self._bytes)
 
 class Word:
-    def __init__(self, b1, b2, comment):
+    def __init__(self, position, b1, b2, comment):
+        self.position = position
         self.b1 = b1
         self.b2 = b2
         self.addr = b2 << 8 | b1
@@ -405,7 +450,7 @@ class Word:
 
     def __str__(self):
         return f'        .word ${self.addr:04x}         ' \
-                f'; {self.comment:10s}{self.b1:02x} {self.b2:02x}\n'
+                f'; {self.comment:12s}{self.position:04X}: {self.b1:02x} {self.b2:02x}\n'
 
     def __len__(self):
         return 2
