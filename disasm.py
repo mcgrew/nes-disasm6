@@ -74,7 +74,8 @@ def parse_args():
     parser.add_argument('--no-sub-check', action='store_true',
          help="Do not attempt to analyze subroutines for validity. Some "
          "applications may intermix data and code in an odd way and confuse the "
-         "analysis, resulting in valid code interpreted as data.")
+         "analysis, resulting in valid code interpreted as data. This output will "
+         "require much more cleanup")
     parser.add_argument('--stdout', action='store_true',
             help="Write all assembly code to stdout. CHR ROM is still saved to disk.")
     return parser.parse_args()
@@ -689,6 +690,8 @@ class Header:
 
 def main():
     args = parse_args()
+    if args.no_sub_check:
+        Subroutine.always_valid = True
     banks = []
     bank_size = args.bank_size
     fixed_banks = args.fixed_banks
