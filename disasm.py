@@ -5,13 +5,79 @@ from collections import OrderedDict
 from sys import argv, stdout, stderr
 from io import StringIO
 from os import urandom
+import os.path
 from base64 import b32encode
+from argparse import ArgumentParser
 
-def to_hex(bytes_:bytes):
-    return ' '.join([f'{x:02x}' for x in bytes_])
+mappers = {
+        # Name, Bank Size, Fixed bank count (at end)
+    0  : ("NROM",32, 1),
+    1  : ("SxROM, MMC1", 16, 0),
+    2  : ("UxROM", 16, 1),
+    3  : ("CNROM", 32, 1),
+    4  : ("TxROM, MMC3, MMC6", 8, 2),
+    5  : ("ExROM, MMC5 (Contains expansion sound)", 8, 0),
+    7  : ("AxROM", 32, 0),
+    9  : ("PxROM, MMC2", 8, 3),
+    10 : ("FxROM, MMC4", 16, 1),
+    11 : ("Color Dreams", 32, 0),
+    13 : ("CPROM", 32, 1),
+    15 : ("100-in-1 Contra Function 16 Multicart", 8, 0),
+    16 : ("Bandai EPROM (24C02)", -1, 0), # Too many submappers
+    18 : ("Jaleco SS8806", 8, 1),
+    19 : ("Namco 163 (Contains expansion sound)", 8, 1),
+    21 : ("VRC4a, VRC4c", 8, 2),
+    22 : ("VRC2a", 8, 2),
+    23 : ("VRC2b, VRC4e", 8, 2),
+    24 : ("VRC6a (Contains expansion sound)", 8, 1),
+    25 : ("VRC4b, VRC4d", 8, 2),
+    26 : ("VRC6b (Contains expansion sound)", 8, 1),
+    34 : ("BNROM, NINA-001", 32, 0),
+    64 : ("RAMBO-1 (MMC3 clone with extra features)", 8, 1),
+    66 : ("GxROM, MxROM", 32, 0),
+    68 : ("After Burner", 16, 1),
+    69 : ("FME-7, Sunsoft 5B", 8, 1),
+    71 : ("Camerica/Codemasters (Similar to UNROM)", 16, 1),
+    73 : ("VRC3", 16, 1),
+    74 : ("Pirate MMC3 derivative", 8, 2),
+    75 : ("VRC1", 8, 1),
+    76 : ("Namco 109 variant", 8, 2),
+    79 : ("NINA-03/NINA-06", 32, 0),
+    85 : ("VRC7", 8, 1),
+    86 : ("JALECO-JF-13", 32, 0),
+    94 : ("Senjou no Ookami", 16, 1),
+    105: ("NES-EVENT (Similar to MMC1)", 16, 0),
+    113: ("NINA-03/NINA-06?? (For multicarts including mapper 79 games.)", 32, 0),
+    118: ("TxSROM, MMC3 (MMC3 with independent mirroring control)", 8, 2),
+    119: ("TQROM, MMC3 (Has both CHR ROM and CHR RAM)", 8, 2),
+    159: ("Bandai EPROM (24C01)", -1, -1),
+    166: ("SUBOR", 8, 0),
+    167: ("SUBOR", 8, 0),
+    180: ("Crazy Climber", 16, 1), #Fixed first bank
+    185: ("CNROM with protection diodes", 32, 1),
+    192: ("Pirate MMC3 derivative", 8, 2),
+    206: ("DxROM, Namco 118 / MIMIC-1", 8, 2),
+    210: ("Namco 175 and 340 (Namco 163 with different mirroring)", 8, 1),
+    228: ("Action 52", 16, 0),
+    232: ("Camerica/Codemasters Quattro (Multicarts)", 16, 0),
+}
 
-def table(bytes_:bytes):
-    return '.hex ' + to_hex(bytes_)
+def parse_args():
+    parser = ArgumentParser()
+    parser.add_argument('filename', help="The rom file to disassemble")
+    parser.add_argument('-b', '--bank-size', type=int, default=-1,
+            help="The size of the switchable bank in KB. Should be 8, 16, or 32. "
+            "The default is to auto-detect based on the mapper")
+    parser.add_argument('-f', '--fixed-banks', type=int, default=-1,
+            help="The number of banks which are fixed (non-swappable) at the end "
+            "of PRG-ROM space. The default is to auto-detect based on the mapper")
+    parser.add_argument('--no-sub-check', action='store_true',
+         help="Do not attempt to analyze subroutines for validity. Some "
+         "applications may intermix data and code in an odd way and confuse the "
+         "analysis, resulting in valid code interpreted as data.")
+    parser.add_argument('--stdout', action='store_true',
+            help="Write all assembly code to stdout. CHR ROM is still saved to disk.")
+    return parser.parse_args()
 
 class OpType(Enum):
     IMPLIED, IMMMEDIATE, ACCUMULATOR, BRANCH, ZEROPAGE, ABSOLUTE, INDIRECT = range(7)
@@ -23,12 +89,25 @@ class Indexing(Enum):
         return self.value
 
 class Bank:
+    """
+    A ROM bank.
+    """
     def __init__(self, number:int, base:int, _bytes:bytes):
+        """
+        Creates a new bank.
+
+        :param number: The bank number for this bank
+        :param base: The base, if known. 0 if unknown, and will attempt to be
+            determined automatically.
+        :param _bytes: The bytes for this bank to be parsed.
+        """
+        if base < 0:
+            raise ValueError("Bank address cannot be negative.")
         self._bytes = bytes(_bytes)
         self.base = base if base else 0x8000
         self.number = number
         self.components = []
-        self.disassemble(_bytes[:-6], _bytes[-6:])
+        self._disassemble(_bytes[:-6], _bytes[-6:])
         i = 0
         if not base:
             old_base = self.base
@@ -37,10 +116,10 @@ class Bank:
             if new_base != old_base:
                 # it changed, so redo the disassembly
                 self.base = new_base
-                self.disassemble(_bytes[:-6], _bytes[-6:])
+                self._disassemble(_bytes[:-6], _bytes[-6:])
         self._add_labels()
 
-    def disassemble(self, bank_bytes:bytes, interrupts:bytes=bytes()):
+    def _disassemble(self, bank_bytes:bytes, interrupts:bytes=bytes()):
         self.components.clear()
         last_instr = i = 0
         while i < len(bank_bytes):
@@ -53,7 +132,7 @@ class Bank:
                 i += len(instr)
             else:
                 if len(self.components) and type(self.components[-1]) is Subroutine:
-                    self.merge_tables()
+                    self._merge_tables()
                 if not len(self.components) or type(self.components[-1]) is not Table:
                     self.components.append(Table(i + self.base, self))
                 self.components[-1].append(bank_bytes[i])
@@ -83,7 +162,7 @@ class Bank:
             return False
         return True
 
-    def merge_tables(self):
+    def _merge_tables(self):
         if len(self.components):
             c = self.components[-1]
             if not c.is_valid():
@@ -110,32 +189,48 @@ class Bank:
 
 
     def find_instr(self, position) -> 'Instruction':
+        """
+        Finds the instruction at the specified address
+
+        :param position: The address of the instruction.
+
+        :return: The requested instruction, or None if no instruction exists at
+            that address.
+        """
         for c in self.components:
             if type(c) is Subroutine:
                 for i in c.instructions:
                     if i.position == position:
                         return i
+                    elif i.position > position:
+                        return None
         return None
 
     def find_base(self):
         """
         Attempts to find the base address based on jump addresses in this bank.
         """
-        base_8 = 0
-        base_c = 0
+        bases = list(range(0x8000, 0x10001, len(self)))
         if type(self.components[-1]) is not Word:
-            return 0x8000
+            bases = bases[:-1] # no interrupt vectors, can't be the last bank
+        bins = [0] * (len(bases) - 1)
         for c in self.components:
             if type(c) is Subroutine:
                 for i in c.instructions:
                     if i.op in ('jmp', 'jsr') and i.type == OpType.ABSOLUTE:
                         b1, b2, _ = bytes(i)
                         jpoint = b2 << 8 | b1
-                        if jpoint > 0xc000:
-                            base_c += 1
-                        elif jpoint > 0x8000:
-                            base_8 += 1
-        return 0xc000 if base_c > base_8 else 0x8000
+                        for i in range(len(bins)):
+                            if jpoint > bases[i] and jpoint < bases[i+1]:
+                                bins[i] += 1
+        base = 0
+        for i,b in enumerate(bins):
+            if bases[base] < bases[i]:
+                base = i
+        return bases[base]
+
+    def __len__(self):
+        return len(self._bytes)
 
     def __bytes__(self):
         return self._bytes
@@ -149,7 +244,18 @@ class Bank:
         return buf.read()
 
 class Instruction:
+    """
+    A single assembly instruction.
+    """
     def __init__(self, position:int, bank:Bank, _bytes:bytes):
+        """
+        Creates a new Instruction.
+
+        :param position: The address of this instruction.
+        :param bank: The bank which contains this instruction.
+        :param _bytes: The bytes which make up this instruction. Any extra bytes
+            will be discarded.
+        """
         self.position = position
         self.opcode = _bytes[0]
         self.bank = bank
@@ -210,6 +316,14 @@ class Instruction:
         self._bytes = self._bytes[:self._size]
 
     def implied(self, opcode):
+        """
+        Determines if this is an implied instruction. Sets the operation name if
+        so.
+
+        :param opcode: The opcode for the instruction.
+
+        :return: True if this opcode is for an implied instruction.
+        """
         if opcode & 0xf == 0x8:
             self.op = (( 'php', 'clc', 'plp', 'sec', 'pha', 'cli', 'pla', 'sei',
                 'dey', 'tya', 'tay', 'clv', 'iny', 'cld', 'inx', 'sed')
@@ -227,6 +341,14 @@ class Instruction:
         return False
 
     def zeropage(self, opcode):
+        """
+        Determines if this is a zero page instruction. Sets the operation name if
+        so.
+
+        :param opcode: The opcode for the instruction.
+
+        :return: True if this opcode is for a zero page instruction.
+        """
         if opcode & 0xf == 5:
             self.op = ('ora', 'and', 'eor', 'adc', 'sta', 'lda', 'cmp', 'sbc')[opcode >> 5]
         if opcode & 0xf == 6:
@@ -245,6 +367,14 @@ class Instruction:
         return False
 
     def absolute(self, opcode):
+        """
+        Determines if this is an absolute instruction. Sets the operation name if
+        so.
+
+        :param opcode: The opcode for the instruction.
+
+        :return: True if this opcode is for an absolute instruction.
+        """
         if opcode in (0x9c, 0x9e):
             return False
         if self._bytes[2] >= 0x80: # don't interpret jumps below 0x8000
@@ -271,18 +401,42 @@ class Instruction:
         return False
 
     def branch(self, opcode):
+        """
+        Determines if this is a branch instruction. Sets the operation name if
+        so.
+
+        :param opcode: The opcode for the instruction.
+
+        :return: True if this opcode is for a branch  instruction.
+        """
         if opcode & 0x1f == 0x10:
             self.op = ('bpl', 'bmi', 'bvc', 'bvs', 'bcc', 'bcs', 'bne', 'beq')[opcode >> 5]
             return True
         return False
 
     def accumulator(self, opcode):
+        """
+        Determines if this is an accumulator instruction. Sets the operation name if
+        so.
+
+        :param opcode: The opcode for the instruction.
+
+        :return: True if this opcode is for an accumulator instruction.
+        """
         if opcode & 0x9f == 0x0a:
             self.op = ('asl', 'rol', 'lsr', 'ror')[opcode >> 5]
             return True
         return False
 
     def immediate(self, opcode):
+        """
+        Determines if this is an immediate instruction. Sets the operation name if
+        so.
+
+        :param opcode: The opcode for the instruction.
+
+        :return: True if this opcode is for an immediate instruction.
+        """
         if opcode & 0x1f == 0x09:
             self.op = ('ora', 'and', 'eor', 'adc', '', 'lda', 'cmp', 'sbc')[opcode >> 5]
         if opcode & 0x9f == 0x80:
@@ -294,6 +448,14 @@ class Instruction:
         return False
 
     def indirect(self, opcode):
+        """
+        Determines if this is an indirect instruction. Sets the operation name if
+        so.
+
+        :param opcode: The opcode for the instruction.
+
+        :return: True if this opcode is for an indirect  instruction.
+        """
         if opcode & 0xf == 1:
             self.op = ('ora', 'and', 'eor', 'adc', 'sta', 'lda', 'cmp', 'sbc')[opcode >> 5]
             self.indexing = Indexing.Y if (opcode >> 4) & 1 else Indexing.X
@@ -301,8 +463,12 @@ class Instruction:
         return False
 
     def get_label(self):
-#         if not self._tag:
-#             self._tag = '_' + b32encode(urandom(5)).decode('utf-8').lower()
+        """
+        Creates a label for this instruction if one does not exist and returns
+        it.
+
+        :return: The instruction label
+        """
         self.label = f'b{self.bank.number}_{self.position:04x}'
         return self.label
 
@@ -345,7 +511,10 @@ class Instruction:
             if self.op == 'jmp' and self.dest:
                 buf.write(f'{self.op} {self.dest}')
             elif not b2:
-                buf.seek(buf.tell()-4)
+                if self.label:
+                    buf.write('\n        ')
+                else:
+                    buf.seek(buf.tell()-4)
                 buf.write(f'.hex {self.opcode:02x} {b1:02x} {b2:02x}')
             elif self.indexing == Indexing.NONE:
                 buf.write(f'{self.op} ${b2:02x}{b1:02x}')
@@ -377,16 +546,31 @@ class Instruction:
         return s
 
 class Subroutine:
+    """
+    An assembly subroutine.
+    """
+    always_valid = False
     def __init__(self, bank:Bank, position:int):
+        if position < 0:
+            raise ValueError("Subroutine address cannot be negative.")
         self.position = position
         self.instructions = []
         self.bank = bank
 
     def is_valid(self):
-#         return len(self.instructions) > 1 and self.instructions[-1].op in ('rts', 'jmp')
-        return self.instructions[-1].op in ('rts', 'jmp')
+        """
+        Determines whether this subroutine is valid. Generally this means the
+        subroutine should end with either a 'jmp' or 'rts' instruction to avoid
+        executing invalid code.
+        """
+        return Subroutine.always_valid or self.instructions[-1].op in ('rts', 'jmp')
 
     def append(self, instruction:Instruction):
+        """
+        Appends an instruction to this Subroutine
+
+        :param instruction: The instruction to append.
+        """
         self.instructions.append(instruction)
 
     def __bytes__(self):
@@ -407,15 +591,27 @@ class Subroutine:
         return buf.read()
 
 class Table:
+    """
+    A table of bytes containing data.
+    """
     def __init__(self, position:int, bank:Bank, _bytes:bytes=bytes()):
         self._bytes = bytes(_bytes)
         self.position = position
         self.bank = bank
 
     def append(self, byte:int):
+        """
+        Appenda a single byte to this table.
+
+        :param byte: The byte to append
+        """
         self._bytes += bytes((byte,))
 
     def extend(self, _bytes):
+        """
+        Appends several bytes to this table. This can be any type which supports
+        the __bytes__ method.
+        """
         self._bytes += bytes(_bytes)
 
     def __bytes__(self):
@@ -438,6 +634,10 @@ class Table:
         return len(self._bytes)
 
 class Word:
+    """
+    An assembly  WORD. This is only used for NMI, RESET, and IRQ vectors in the
+    disassembler.
+    """
     def __init__(self, position, b1, b2, comment):
         self.position = position
         self.b1 = b1
@@ -456,13 +656,21 @@ class Word:
         return 2
 
 class Header:
+    """
+    The ROM header
+    """
     def __init__(self, _bytes:bytes):
         self._bytes = bytes(_bytes)
+        self.prg_size = _bytes[4] * 16 * 1024
+        self.chr_size = _bytes[5] *  8 * 1024
         self.mapper = (_bytes[6] >> 4) | (_bytes[7] * 0xf0)
 
     def __str__(self):
         buf = StringIO()
-        buf.write(f';  HEADER - MAPPER {self.mapper}\n')
+        if self.mapper in mappers:
+            buf.write(f';  HEADER - MAPPER {self.mapper} - {mappers[self.mapper][0]}\n')
+        else:
+            buf.write(f';  HEADER - MAPPER {self.mapper}\n')
         buf.write('        .db "NES", $1a\n')
         buf.write(f'        .db {self._bytes[ 4]:d}  ; PRG ROM banks\n')
         buf.write(f'        .db {self._bytes[ 5]:d}  ; CHR ROM banks\n')
@@ -480,22 +688,55 @@ class Header:
         return self._bytes
 
 def main():
+    args = parse_args()
     banks = []
-    with open(argv[1], 'rb') as f:
+    bank_size = args.bank_size
+    fixed_banks = args.fixed_banks
+    with open(args.filename, 'rb') as f:
         header = Header(f.read(16))
-        for i in range(bytes(header)[4]):
-            rom = f.read(16384)
-            if i == bytes(header)[4]-1: # is the last bank always base $C000?
-                banks.append(Bank(i, 0xc000, rom))
+        if bank_size < 0:
+            if header.mapper in mappers:
+                bank_size = mappers[header.mapper][1] * 1024
+                stderr.write(f'ROM uses mapper {header.mapper} '
+                    f'- {mappers[header.mapper][0]}\n')
+        stderr.write(f'Using bank size of {bank_size//1024}K\n')
+        if fixed_banks < 0:
+            if header.mapper in mappers:
+                fixed_banks = mappers[header.mapper][2]
             else:
-                banks.append(Bank(i, 0, rom))
+                fixed_banks = 0
+        bank_count = header.prg_size // bank_size
+        stderr.write(f'ROM has {bank_count} banks.\n')
+        fixed_bank_start = bank_count - fixed_banks
+
+        for i in range(bank_count):
+            rom = f.read(bank_size)
+            base = 0
+            if i >= fixed_bank_start:
+                base = 0x10000 - (bank_size * (bank_count - i))
+            banks.append(Bank(i, base, rom))
         incbin = f.read()
-    print(header)
+    main_asm = None
+    if not args.stdout:
+        asmfile = f'{os.path.splitext(os.path.basename(args.filename))[0]}.asm'
+        main_asm = open(asmfile, 'w')
+        main_asm.write(f'{header}\n\n')
+    else:
+        stdout.write(f'{header}\n\n')
     for b in banks:
-        print(b)
+        if args.stdout:
+            stdout.write(str(b))
+        else:
+            with open(f'bank_{b.number:02d}.asm', 'w') as asm:
+                asm.write(str(b))
+                main_asm.write(f'        .include bank_{b.number:02d}.asm\n')
     with open('chr_rom.bin', 'wb') as chr_rom:
         chr_rom.write(incbin)
-    print('.incbin chr_rom.bin')
+    if not args.stdout:
+        main_asm.write('        .incbin chr_rom.bin\n')
+        main_asm.close()
+    else:
+        stdout.write('         .incbin chr_rom.bin\n')
 
 if __name__ == '__main__':
     main()
