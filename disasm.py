@@ -144,8 +144,17 @@ class Bank:
             irq = Word(0xffe, *interrupts[4:], 'IRQ')
             if self._valid_interrupts(nmi, reset, irq):
                 self.components.append(nmi)
+                instr = self.find_instr(nmi.addr)
+                if instr:
+                    nmi.dest = instr.get_label()
                 self.components.append(reset)
+                instr = self.find_instr(reset.addr)
+                if instr:
+                    reset.dest = instr.get_label()
                 self.components.append(irq)
+                instr = self.find_instr(irq.addr)
+                if instr:
+                    irq.dest = instr.get_label()
             else:
                 if type(self.components[-1]) is Table:
                     t = self.components[-1]
@@ -182,7 +191,7 @@ class Bank:
                         target = self.find_instr(dest)
                         if target:
                             i.dest = target.get_label()
-                    elif i.op == 'jmp' and i.type == OpType.ABSOLUTE:
+                    elif i.op in ('jmp','jsr') and i.type == OpType.ABSOLUTE:
                         dest = bytes(i)[2] << 8 | bytes(i)[1]
                         target = self.find_instr(dest)
                         if target:
@@ -495,21 +504,25 @@ class Instruction:
         else:
             buf.write(' ' * 12)
         line_len = buf.tell()
+
         if self.type == OpType.IMPLIED:
             buf.write(self.op)
+
         if self.type == OpType.ACCUMULATOR:
             buf.write(f'{self.op} a')
+
         if self.type == OpType.IMMMEDIATE:
                 buf.write(f'{self.op} #${b1:02x}')
         if self.type == OpType.BRANCH:
             buf.write(f'{self.op} {self.dest}')
+
         if self.type == OpType.ZEROPAGE:
             if self.indexing == Indexing.NONE:
                 buf.write(f'{self.op} ${b1:02x}')
             else:
                 buf.write(f'{self.op} ${b1:02x},{self.indexing}')
         if self.type == OpType.ABSOLUTE:
-            if self.op == 'jmp' and self.dest:
+            if self.op in ('jmp','jsr') and self.dest:
                 buf.write(f'{self.op} {self.dest}')
             elif not b2:
                 if self.label:
@@ -644,14 +657,21 @@ class Word:
         self.b1 = b1
         self.b2 = b2
         self.addr = b2 << 8 | b1
+        self.dest = ''
         self.comment = comment
 
     def __bytes__(self):
         return bytes((self.b1, self.b2))
 
     def __str__(self):
-        return f'        .word ${self.addr:04x}         ' \
-                f'; {self.comment:12s}{self.position:04X}: {self.b1:02x} {self.b2:02x}\n'
+        buf = StringIO()
+        if self.dest:
+            buf.write(f'        .word {self.dest}'.ljust(28))
+        else:
+            buf.write(f'        .word ${self.addr:04x}'.ljust(28))
+        buf.write(f'; {self.comment:12s}{self.position:04X}: {self.b1:02x} {self.b2:02x}\n')
+        buf.seek(0)
+        return buf.read()
 
     def __len__(self):
         return 2
@@ -715,7 +735,9 @@ def main():
         for i in range(bank_count):
             rom = f.read(bank_size)
             base = 0
-            if i >= fixed_bank_start:
+            if bank_size == 0x8000:
+                base = 0x8000
+            elif i >= fixed_bank_start:
                 base = 0x10000 - (bank_size * (bank_count - i))
             banks.append(Bank(i, base, rom))
         incbin = f.read()
