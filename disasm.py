@@ -11,73 +11,76 @@ from argparse import ArgumentParser
 
 mappers = {
         # Name, Bank Size, Fixed bank count (at end)
-    0  : ("NROM",32, 1),
-    1  : ("SxROM, MMC1", 16, 0),
-    2  : ("UxROM", 16, 1),
-    3  : ("CNROM", 32, 1),
-    4  : ("TxROM, MMC3, MMC6", 8, 2),
-    5  : ("ExROM, MMC5 (Contains expansion sound)", 8, 0),
-    7  : ("AxROM", 32, 0),
-    9  : ("PxROM, MMC2", 8, 3),
-    10 : ("FxROM, MMC4", 16, 1),
-    11 : ("Color Dreams", 32, 0),
-    13 : ("CPROM", 32, 1),
-    15 : ("100-in-1 Contra Function 16 Multicart", 8, 0),
-    16 : ("Bandai EPROM (24C02)", -1, 0), # Too many submappers
-    18 : ("Jaleco SS8806", 8, 1),
-    19 : ("Namco 163 (Contains expansion sound)", 8, 1),
-    21 : ("VRC4a, VRC4c", 8, 2),
-    22 : ("VRC2a", 8, 2),
-    23 : ("VRC2b, VRC4e", 8, 2),
-    24 : ("VRC6a (Contains expansion sound)", 8, 1),
-    25 : ("VRC4b, VRC4d", 8, 2),
-    26 : ("VRC6b (Contains expansion sound)", 8, 1),
-    34 : ("BNROM, NINA-001", 32, 0),
-    64 : ("RAMBO-1 (MMC3 clone with extra features)", 8, 1),
-    66 : ("GxROM, MxROM", 32, 0),
-    68 : ("After Burner", 16, 1),
-    69 : ("FME-7, Sunsoft 5B", 8, 1),
-    71 : ("Camerica/Codemasters (Similar to UNROM)", 16, 1),
-    73 : ("VRC3", 16, 1),
-    74 : ("Pirate MMC3 derivative", 8, 2),
-    75 : ("VRC1", 8, 1),
-    76 : ("Namco 109 variant", 8, 2),
-    79 : ("NINA-03/NINA-06", 32, 0),
-    85 : ("VRC7", 8, 1),
-    86 : ("JALECO-JF-13", 32, 0),
-    94 : ("Senjou no Ookami", 16, 1),
-    105: ("NES-EVENT (Similar to MMC1)", 16, 0),
-    113: ("NINA-03/NINA-06?? (For multicarts including mapper 79 games.)", 32, 0),
-    118: ("TxSROM, MMC3 (MMC3 with independent mirroring control)", 8, 2),
-    119: ("TQROM, MMC3 (Has both CHR ROM and CHR RAM)", 8, 2),
-    159: ("Bandai EPROM (24C01)", -1, -1),
-    166: ("SUBOR", 8, 0),
-    167: ("SUBOR", 8, 0),
-    180: ("Crazy Climber", 16, 1), #Fixed first bank
-    185: ("CNROM with protection diodes", 32, 1),
-    192: ("Pirate MMC3 derivative", 8, 2),
-    206: ("DxROM, Namco 118 / MIMIC-1", 8, 2),
-    210: ("Namco 175 and 340 (Namco 163 with different mirroring)", 8, 1),
-    228: ("Action 52", 16, 0),
-    232: ("Camerica/Codemasters Quattro (Multicarts)", 16, 0),
+    0  : ('NROM',32, 1),
+    1  : ('SxROM, MMC1', 16, 0),
+    2  : ('UxROM', 16, 1),
+    3  : ('CNROM', 32, 1),
+    4  : ('TxROM, MMC3, MMC6', 8, 2),
+    5  : ('ExROM, MMC5 (Contains expansion sound)', 8, 0),
+    7  : ('AxROM', 32, 0),
+    9  : ('PxROM, MMC2', 8, 3),
+    10 : ('FxROM, MMC4', 16, 1),
+    11 : ('Color Dreams', 32, 0),
+    13 : ('CPROM', 32, 1),
+    15 : ('100-in-1 Contra Function 16 Multicart', 8, 0),
+    16 : ('Bandai EPROM (24C02)', -1, 0), # Too many submappers
+    18 : ('Jaleco SS8806', 8, 1),
+    19 : ('Namco 163 (Contains expansion sound)', 8, 1),
+    21 : ('VRC4a, VRC4c', 8, 2),
+    22 : ('VRC2a', 8, 2),
+    23 : ('VRC2b, VRC4e', 8, 2),
+    24 : ('VRC6a (Contains expansion sound)', 8, 1),
+    25 : ('VRC4b, VRC4d', 8, 2),
+    26 : ('VRC6b (Contains expansion sound)', 8, 1),
+    34 : ('BNROM, NINA-001', 32, 0),
+    64 : ('RAMBO-1 (MMC3 clone with extra features)', 8, 1),
+    66 : ('GxROM, MxROM', 32, 0),
+    68 : ('After Burner', 16, 1),
+    69 : ('FME-7, Sunsoft 5B', 8, 1),
+    71 : ('Camerica/Codemasters (Similar to UNROM)', 16, 1),
+    73 : ('VRC3', 16, 1),
+    74 : ('Pirate MMC3 derivative', 8, 2),
+    75 : ('VRC1', 8, 1),
+    76 : ('Namco 109 variant', 8, 2),
+    79 : ('NINA-03/NINA-06', 32, 0),
+    85 : ('VRC7', 8, 1),
+    86 : ('JALECO-JF-13', 32, 0),
+    94 : ('Senjou no Ookami', 16, 1),
+    105: ('NES-EVENT (Similar to MMC1)', 16, 0),
+    113: ('NINA-03/NINA-06?? (For multicarts including mapper 79 games.)', 32, 0),
+    118: ('TxSROM, MMC3 (MMC3 with independent mirroring control)', 8, 2),
+    119: ('TQROM, MMC3 (Has both CHR ROM and CHR RAM)', 8, 2),
+    159: ('Bandai EPROM (24C01)', -1, -1),
+    166: ('SUBOR', 8, 0),
+    167: ('SUBOR', 8, 0),
+    180: ('Crazy Climber', 16, 1), #Fixed first bank
+    185: ('CNROM with protection diodes', 32, 1),
+    192: ('Pirate MMC3 derivative', 8, 2),
+    206: ('DxROM, Namco 118 / MIMIC-1', 8, 2),
+    210: ('Namco 175 and 340 (Namco 163 with different mirroring)', 8, 1),
+    228: ('Action 52', 16, 0),
+    232: ('Camerica/Codemasters Quattro (Multicarts)', 16, 0),
 }
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('filename', help="The rom file to disassemble")
+    parser.add_argument('filename', help='The rom file to disassemble')
     parser.add_argument('-b', '--bank-size', type=int, default=-1,
-            help="The size of the switchable bank in KB. Should be 8, 16, or 32. "
-            "The default is to auto-detect based on the mapper")
+            help='The size of the switchable bank in KB. Should be 8, 16, or 32. '
+            'The default is to auto-detect based on the mapper')
     parser.add_argument('-f', '--fixed-banks', type=int, default=-1,
-            help="The number of banks which are fixed (non-swappable) at the end "
-            "of PRG-ROM space. The default is to auto-detect based on the mapper")
-    parser.add_argument('--no-sub-check', action='store_true',
-         help="Do not attempt to analyze subroutines for validity. Some "
-         "applications may intermix data and code in an odd way and confuse the "
-         "analysis, resulting in valid code interpreted as data. This output will "
-         "require much more cleanup")
+            help='The number of banks which are fixed (non-swappable) at the end '
+            'of PRG-ROM space. The default is to auto-detect based on the mapper')
+    parser.add_argument('-m', '--min-sub-size', type=int, default=2,
+            help='The minimum number of instructions for a valid subroutine. '
+            'Anything smaller will be converted to a data table. Default is 2.')
+    parser.add_argument('-n', '--no-sub-check', action='store_true',
+         help='Do not attempt to analyze subroutines for validity. Some '
+         'applications may intermix data and code in an odd way and confuse the '
+         'analysis, resulting in valid code interpreted as data. This output will '
+         'require much more cleanup')
     parser.add_argument('--stdout', action='store_true',
-            help="Write all assembly code to stdout. CHR ROM is still saved to disk.")
+            help='Write all assembly code to stdout. CHR ROM is still saved to disk.')
     return parser.parse_args()
 
 class OpType(Enum):
@@ -563,7 +566,8 @@ class Subroutine:
     """
     An assembly subroutine.
     """
-    always_valid = False
+    always_valid:bool = False
+    min_size:int = 2
     def __init__(self, bank:Bank, position:int):
         if position < 0:
             raise ValueError("Subroutine address cannot be negative.")
@@ -577,7 +581,8 @@ class Subroutine:
         subroutine should end with either a 'jmp' or 'rts' instruction to avoid
         executing invalid code.
         """
-        return Subroutine.always_valid or self.instructions[-1].op in ('rts', 'jmp')
+        return len(self.instructions) >= Subroutine.min_size and \
+            (Subroutine.always_valid or self.instructions[-1].op in ('rts', 'jmp'))
 
     def append(self, instruction:Instruction):
         """
@@ -712,6 +717,7 @@ def main():
     args = parse_args()
     if args.no_sub_check:
         Subroutine.always_valid = True
+    Subroutine.min_size = args.min_sub_size
     banks = []
     bank_size = args.bank_size
     fixed_banks = args.fixed_banks
@@ -750,7 +756,7 @@ def main():
         stdout.write(f'{header}\n\n')
     for b in banks:
         if args.stdout:
-            stdout.write(str(b))
+            stdout.write(f'{b}\n\n')
         else:
             with open(f'bank_{b.number:02d}.asm', 'w') as asm:
                 asm.write(str(b))
@@ -761,7 +767,7 @@ def main():
         main_asm.write('        .incbin chr_rom.bin\n')
         main_asm.close()
     else:
-        stdout.write('         .incbin chr_rom.bin\n')
+        stdout.write('        .incbin chr_rom.bin\n')
 
 if __name__ == '__main__':
     main()
