@@ -9,6 +9,39 @@ import os.path
 from base64 import b32encode
 from argparse import ArgumentParser
 
+mmio = {
+    0x2000 : 'PPUCTRL',
+    0x2001 : 'PPUMASK',
+    0x2002 : 'PPUSTATUS',
+    0x2003 : 'OAMADDR',
+    0x2004 : 'OAMDATA',
+    0x2005 : 'PPUSCROLL',
+    0x2006 : 'PPUADDR',
+    0x2007 : 'PPUDATA',
+    0x4000 : 'SQ1_VOL',
+    0x4001 : 'SQ1_SWEEP',
+    0x4002 : 'SQ1_LO',
+    0x4003 : 'SQ1_HI',
+    0x4004 : 'SQ2_VOL',
+    0x4005 : 'SQ2_SWEEP',
+    0x4006 : 'SQ2_LO',
+    0x4007 : 'SQ2_HI',
+    0x4008 : 'TRI_LINEAR',
+    0x400A : 'TRI_LO',
+    0x400B : 'TRI_HI',
+    0x400C : 'NOISE_VOL',
+    0x400E : 'NOISE_LO',
+    0x400F : 'NOISE_HI',
+    0x4010 : 'DMC_FREQ',
+    0x4011 : 'DMC_RAW',
+    0x4012 : 'DMC_START',
+    0x4013 : 'DMC_LEN',
+    0x4014 : 'OAMDMA',
+    0x4015 : 'SND_CHN',
+    0x4016 : 'JOY1',
+    0x4017 : 'JOY2',
+}
+
 mappers = {
         # Name, Bank Size, Fixed bank count (at end)
     0  : ('NROM',32, 1),
@@ -316,15 +349,12 @@ class Instruction:
 
         elif b2 is not None and self.absolute(self.opcode):
             self.type = OpType.ABSOLUTE
-            if not b2:
-                if self.indexing == Indexing.NONE:
-                    self.pre_comment = f'{self.op} ${b2:02x}{b1:02x}'
-                else:
-                    self.pre_comment = f'{self.op} ${b2:02x}{b1:02x},{self.indexing}'
             self._size = 3
 
         if self.op:
-            self.comment = f'{self.position:04X}:  ' + \
+            source_pos = self.position % len(self.bank)
+            source_pos += len(self.bank) * self.bank.number
+            self.comment = f'{source_pos:05X}:  ' + \
                 ' '.join([f'{x:02x}' for x in _bytes[:self._size]])
         self._bytes = self._bytes[:self._size]
 
@@ -501,12 +531,12 @@ class Instruction:
         b2 = self._bytes[2] if len(self._bytes) > 2 else None
         buf = StringIO()
         if self.pre_comment:
-            buf.write(f';           {self.pre_comment}\n')
+            buf.write(f'; {self.pre_comment}\n')
+        line_len = buf.tell()
         if self.label:
             buf.write(f'{self.label}:'.ljust(12))
         else:
             buf.write(' ' * 12)
-        line_len = buf.tell()
 
         if self.type == OpType.IMPLIED:
             buf.write(self.op)
@@ -525,18 +555,24 @@ class Instruction:
             else:
                 buf.write(f'{self.op} ${b1:02x},{self.indexing}')
         if self.type == OpType.ABSOLUTE:
+            addr = (b2 << 8) | b1
             if self.op in ('jmp','jsr') and self.dest:
                 buf.write(f'{self.op} {self.dest}')
-            elif not b2:
-                if self.label:
-                    buf.write('\n        ')
-                else:
-                    buf.seek(buf.tell()-4)
-                buf.write(f'.hex {self.opcode:02x} {b1:02x} {b2:02x}')
-            elif self.indexing == Indexing.NONE:
-                buf.write(f'{self.op} ${b2:02x}{b1:02x}')
             else:
-                buf.write(f'{self.op} ${b2:02x}{b1:02x},{self.indexing}')
+                if not b2:
+                    buf.seek(buf.tell() - 2)
+                    buf.write('; ')
+                if addr in mmio:
+                    buf.write(f'{self.op} {mmio[addr]}')
+                else:
+                    buf.write(f'{self.op} ${addr:04x}')
+                if self.indexing != Indexing.NONE:
+                    buf.write(f',{self.indexing}')
+                if not b2: 
+                    buf.write('     ; avoid optimization\n')
+                    line_len = buf.tell()
+                    buf.write(' ' * 12)
+                    buf.write(f'hex {self.opcode:02x} {b1:02x} {b2:02x}')
 
         if self.type == OpType.INDIRECT:
             if self.op == 'jmp':
@@ -549,7 +585,7 @@ class Instruction:
                 buf.write(f'{self.op} (${b1:02x}),y')
 
         if self.comment:
-            buf.write(' ' * (28 + line_len - buf.tell()))
+            buf.write(' ' * (40 + line_len - buf.tell()))
             buf.write(f'; {self.comment}')
         buf.write('\n')
 
@@ -606,6 +642,7 @@ class Subroutine:
 #         buf.write(f'sub_b{self.bank.number}_{self.position:04x}:\n')
         for i in self.instructions:
             buf.write(str(i))
+        buf.write('\n')
         buf.seek(0)
         return buf.read()
 
@@ -638,14 +675,17 @@ class Table:
 
     def __str__(self):
         buf = StringIO()
+        source_pos = self.position % len(self.bank)
+        source_pos += len(self.bank) * self.bank.number
         buf.write(f'tab_b{self.bank.number}_{self.position:04x}:\n')
         last_line = buf.tell()
         for i in range(0, len(self._bytes), 16):
-            buf.write(' ' * 8)
-            buf.write(f'.hex {" ".join([f"{x:02x}" for x in self._bytes[i:i+16]])}')
-            buf.write(' ' * (60 + last_line - buf.tell()))
-            buf.write(f'  ; {self.position + i:04X}\n')
+            buf.write(' ' * 12)
+            buf.write(f'hex {" ".join([f"{x:02x}" for x in self._bytes[i:i+16]])}')
+            buf.write(' ' * (64 + last_line - buf.tell()))
+            buf.write(f'  ; {source_pos + i:05X}\n')
             last_line = buf.tell()
+        buf.write('\n')
         buf.seek(0)
         return buf.read()
 
@@ -713,6 +753,14 @@ class Header:
     def __bytes__(self):
         return self._bytes
 
+def write_base_asm(header, out=stdout):
+    out.write(f'{header}\n\n')
+    out.write(';  MMIO\n')
+    for addr,item in mmio.items():
+        out.write(f'        {item:10s} EQU ${addr:04x}\n')
+    out.write('\n')
+
+
 def main():
     args = parse_args()
     if args.no_sub_check:
@@ -747,27 +795,25 @@ def main():
                 base = 0x10000 - (bank_size * (bank_count - i))
             banks.append(Bank(i, base, rom))
         incbin = f.read()
-    main_asm = None
+    main_asm = stdout
     if not args.stdout:
         asmfile = f'{os.path.splitext(os.path.basename(args.filename))[0]}.asm'
         main_asm = open(asmfile, 'w')
-        main_asm.write(f'{header}\n\n')
-    else:
-        stdout.write(f'{header}\n\n')
-    for b in banks:
-        if args.stdout:
+    write_base_asm(header, main_asm)
+
+    if args.stdout:
+        for b in banks:
             stdout.write(f'{b}\n\n')
-        else:
+    else:
+        for b in banks:
             with open(f'bank_{b.number:02d}.asm', 'w') as asm:
                 asm.write(str(b))
                 main_asm.write(f'        .include bank_{b.number:02d}.asm\n')
     with open('chr_rom.bin', 'wb') as chr_rom:
         chr_rom.write(incbin)
+    main_asm.write('        .incbin chr_rom.bin\n')
     if not args.stdout:
-        main_asm.write('        .incbin chr_rom.bin\n')
         main_asm.close()
-    else:
-        stdout.write('        .incbin chr_rom.bin\n')
 
 if __name__ == '__main__':
     main()
