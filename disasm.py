@@ -329,7 +329,6 @@ class Instruction:
 
         self.op = ''
         self.comment = ''
-        self.pre_comment = ''
         self.indexing = Indexing.NONE
 
         if b2 is not None and self.opcode == 0x6c:
@@ -366,11 +365,6 @@ class Instruction:
             self.type = OpType.ABSOLUTE
             self._size = 3
 
-        if self.op:
-            source_pos = self.position % len(self.bank)
-            source_pos += len(self.bank) * self.bank.number
-            self.comment = f'{source_pos:05X}:  ' + \
-                ' '.join([f'{x:02x}' for x in _bytes[:self._size]])
         self._bytes = self._bytes[:self._size]
 
     def implied(self, opcode):
@@ -545,8 +539,9 @@ class Instruction:
         b1 = self._bytes[1] if len(self._bytes) > 1 else None
         b2 = self._bytes[2] if len(self._bytes) > 2 else None
         buf = StringIO()
-        if self.pre_comment:
-            buf.write(f'; {self.pre_comment}\n')
+        if self.comment:
+            buf.write(' ' * 10)
+            buf.write(f'; {self.comment}\n')
         line_len = buf.tell()
         if self.label:
             buf.write(f'{self.label}:'.ljust(12))
@@ -602,9 +597,11 @@ class Instruction:
             elif self.indexing == Indexing.Y:
                 buf.write(f'{self.op} (${b1:02x}),y')
 
-        if self.comment:
-            buf.write(' ' * (40 + line_len - buf.tell()))
-            buf.write(f'; {self.comment}')
+        source_pos = self.position % len(self.bank)
+        source_pos += len(self.bank) * self.bank.number
+        buf.write(' ' * (40 + line_len - buf.tell()))
+        buf.write(f'; {source_pos:05X}:  ')
+        buf.write(' '.join([f'{x:02x}' for x in self._bytes]))
         buf.write('\n')
 
         buf.seek(0)
@@ -723,7 +720,7 @@ class Word:
     An assembly  WORD. This is only used for NMI, RESET, and IRQ vectors in the
     disassembler.
     """
-    def __init__(self, position, b1, b2, comment):
+    def __init__(self, position, b1, b2, comment=''):
         self.position = position
         self.b1 = b1
         self.b2 = b2
@@ -740,7 +737,7 @@ class Word:
             buf.write(f'        .word {self.dest}'.ljust(28))
         else:
             buf.write(f'        .word ${self.addr:04x}'.ljust(28))
-        buf.write(f'; {self.comment:12s}{self.position:04X}: {self.b1:02x} {self.b2:02x}\n')
+        buf.write(f'; {self.comment:10s}; {self.position:04X}: {self.b1:02x} {self.b2:02x}\n')
         buf.seek(0)
         return buf.read()
 
