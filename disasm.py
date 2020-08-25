@@ -252,6 +252,21 @@ class Bank:
                         return None
         return None
 
+    def find_table(self, position) -> 'Table':
+        """
+        Finds the instruction at the specified address
+
+        :param position: The address of the instruction.
+
+        :return: The requested instruction, or None if no instruction exists at
+            that address.
+        """
+        for c in self.components:
+            if type(c) is Table:
+                if c.position == position:
+                        return c
+        return None
+
     def find_base(self):
         """
         Attempts to find the base address based on jump addresses in this bank.
@@ -562,8 +577,11 @@ class Instruction:
                 if not b2:
                     buf.seek(buf.tell() - 2)
                     buf.write('; ')
+                table = self.bank.find_table(addr)
                 if addr in mmio:
                     buf.write(f'{self.op} {mmio[addr]}')
+                elif table:
+                    buf.write(f'{self.op} {table.get_label()}')
                 else:
                     buf.write(f'{self.op} ${addr:04x}')
                 if self.indexing != Indexing.NONE:
@@ -670,6 +688,14 @@ class Table:
         """
         self._bytes += bytes(_bytes)
 
+    def get_label(self):
+        """
+        Gets the label for this table if one does not exist and returns it.
+
+        :return: The instruction label
+        """
+        return f'tab_b{self.bank.number}_{self.position:04x}'
+
     def __bytes__(self):
         return self._bytes
 
@@ -677,7 +703,7 @@ class Table:
         buf = StringIO()
         source_pos = self.position % len(self.bank)
         source_pos += len(self.bank) * self.bank.number
-        buf.write(f'tab_b{self.bank.number}_{self.position:04x}:\n')
+        buf.write(f'{self.get_label()}:\n')
         last_line = buf.tell()
         for i in range(0, len(self._bytes), 16):
             buf.write(' ' * 12)
