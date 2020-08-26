@@ -163,7 +163,7 @@ class Bank:
             instr = Instruction(i + self.base, self, bank_bytes[i:i+3])
             if instr:
                 if not len(self.components) or type(self.components[-1]) is not Subroutine \
-                        or self.components[-1].is_valid():
+                        or self.components[-1].is_complete():
                     self.components.append(Subroutine(self, instr.position))
                 self.components[-1].append(instr)
                 i += len(instr)
@@ -626,11 +626,20 @@ class Subroutine:
         self.instructions = []
         self.bank = bank
 
+    def is_complete(self):
+        """
+        Determines whether this subroutine is complete. Generally this means the
+        subroutine ends with either a 'jmp' or 'rts' instruction to avoid
+        executing invalid code.
+        """
+        return self.instructions[-1].op in ('rts', 'jmp')
+
     def is_valid(self):
         """
         Determines whether this subroutine is valid. Generally this means the
-        subroutine should end with either a 'jmp' or 'rts' instruction to avoid
-        executing invalid code.
+        subroutine ends with either a 'jmp' or 'rts' instruction to avoid
+        executing invalid code. The behavior of this method can be influenced by
+        command line flags
         """
         return len(self.instructions) >= Subroutine.min_size and \
             (Subroutine.always_valid or self.instructions[-1].op in ('rts', 'jmp'))
