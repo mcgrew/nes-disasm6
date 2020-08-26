@@ -2,7 +2,7 @@
 
 from enum import Enum
 from collections import OrderedDict
-from sys import argv, stdout, stderr
+from sys import stdout, stderr, exit
 from io import StringIO
 from os import urandom
 import os.path
@@ -755,7 +755,7 @@ class Header:
         self._bytes = bytes(_bytes)
         self.prg_size = _bytes[4] * 16 * 1024
         self.chr_size = _bytes[5] *  8 * 1024
-        self.mapper = (_bytes[6] >> 4) | (_bytes[7] * 0xf0)
+        self.mapper = (_bytes[6] >> 4) | (_bytes[7] & 0xf0)
 
     def __str__(self):
         buf = StringIO()
@@ -802,6 +802,9 @@ def main():
                 bank_size = mappers[header.mapper][1] * 1024
                 stderr.write(f'ROM uses mapper {header.mapper} '
                     f'- {mappers[header.mapper][0]}\n')
+        if bank_size < 0:
+            print(f'Unknown mapper {header.mapper}, please specify bank size.')
+            exit(-1)
         stderr.write(f'Using bank size of {bank_size//1024}K\n')
         if fixed_banks < 0:
             if header.mapper in mappers:
