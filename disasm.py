@@ -175,9 +175,9 @@ class Bank:
                 self.components[-1].append(bank_bytes[i])
                 i += 1
         if len(interrupts):
-            nmi = Word(0xffa, *interrupts[:2], 'NMI')
-            reset = Word(0xffc, *interrupts[2:4], 'RESET')
-            irq = Word(0xffe, *interrupts[4:], 'IRQ')
+            nmi = Word(len(self) - 6, self, *interrupts[:2], 'NMI')
+            reset = Word(len(self) - 4, self, *interrupts[2:4], 'RESET')
+            irq = Word(len(self) - 2, self, *interrupts[4:], 'IRQ')
             if self._valid_interrupts(nmi, reset, irq):
                 self.components.append(nmi)
                 instr = self.find_instr(nmi.addr)
@@ -720,8 +720,9 @@ class Word:
     An assembly  WORD. This is only used for NMI, RESET, and IRQ vectors in the
     disassembler.
     """
-    def __init__(self, position, b1, b2, comment=''):
+    def __init__(self, position, bank, b1, b2, comment=''):
         self.position = position
+        self.bank = bank
         self.b1 = b1
         self.b2 = b2
         self.addr = b2 << 8 | b1
@@ -732,12 +733,14 @@ class Word:
         return bytes((self.b1, self.b2))
 
     def __str__(self):
+        source_pos = self.position % len(self.bank)
+        source_pos += len(self.bank) * self.bank.number
         buf = StringIO()
         if self.dest:
             buf.write(f'        .word {self.dest}'.ljust(28))
         else:
             buf.write(f'        .word ${self.addr:04x}'.ljust(28))
-        buf.write(f'; {self.comment:10s}; {self.position:04X}: {self.b1:02x} {self.b2:02x}\n')
+        buf.write(f'; {self.comment:10s}  {source_pos:05X}: {self.b1:02x} {self.b2:02x}\n')
         buf.seek(0)
         return buf.read()
 
