@@ -404,7 +404,7 @@ class Instruction:
         """
         if opcode in (0x9c, 0x9e):
             return False
-        if self._bytes[2] >= 0x80: # don't interpret jumps below 0x8000
+        if self._bytes[2] >= 0x60: # don't interpret jumps below 0x6000 (SRAM)
             if opcode == 0x20:
                 self.op = 'jsr'
             if opcode == 0x4c:
