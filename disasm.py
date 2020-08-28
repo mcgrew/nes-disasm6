@@ -854,7 +854,7 @@ def main():
             with open(f'bank_{b.number:02d}.asm', 'w') as asm:
                 asm.write(str(b))
                 main_asm.write(f'        .include bank_{b.number:02d}.asm\n')
-    if not args.no_chr:
+    if not args.no_chr and header.chr_size:
         with open('chr_rom.bin', 'wb') as chr_rom:
             chr_rom.write(incbin)
         main_asm.write('        .incbin chr_rom.bin\n')
