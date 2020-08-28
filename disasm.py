@@ -8,6 +8,7 @@ from os import urandom
 import os.path
 from base64 import b32encode
 from argparse import ArgumentParser
+from typing import Any
 
 mmio = {
     0x2000 : 'PPUCTRL',
@@ -107,11 +108,12 @@ def parse_args():
     parser.add_argument('-m', '--min-sub-size', type=int, default=2,
             help='The minimum number of instructions for a valid subroutine. '
             'Anything smaller will be converted to a data table. Default is 2.')
-    parser.add_argument('-n', '--no-sub-check', action='store_true',
+    parser.add_argument('-s', '--no-sub-check', action='store_true',
          help='Do not attempt to analyze subroutines for validity. Some '
          'applications may intermix data and code in an odd way and confuse the '
          'analysis, resulting in valid code interpreted as data. This output will '
          'require much more cleanup')
+    parser.add_argument('-c', '--no-chr', action='store_true', help="Do not create chr file")
     parser.add_argument('--stdout', action='store_true',
             help='Write all assembly code to stdout. CHR ROM is still saved to disk.')
     return parser.parse_args()
@@ -129,7 +131,7 @@ class Bank:
     """
     A ROM bank.
     """
-    def __init__(self, number:int, base:int, _bytes:bytes):
+    def __init__(self, number:int, base:int, _bytes:bytes, fixed:int=0):
         """
         Creates a new bank.
 
@@ -144,6 +146,7 @@ class Bank:
         self.base = base if base else 0x8000
         self.number = number
         self.components = []
+        self._fixed = fixed
         self._disassemble(_bytes[:-6], _bytes[-6:])
         i = 0
         if not base:
@@ -154,7 +157,8 @@ class Bank:
                 # it changed, so redo the disassembly
                 self.base = new_base
                 self._disassemble(_bytes[:-6], _bytes[-6:])
-        self._add_labels()
+        # generate any necessary labels
+        str(self)
 
     def _disassemble(self, bank_bytes:bytes, interrupts:bytes=bytes()):
         self.components.clear()
@@ -175,22 +179,15 @@ class Bank:
                 self.components[-1].append(bank_bytes[i])
                 i += 1
         if len(interrupts):
-            nmi = Word(len(self) - 6, self, *interrupts[:2], 'NMI')
-            reset = Word(len(self) - 4, self, *interrupts[2:4], 'RESET')
-            irq = Word(len(self) - 2, self, *interrupts[4:], 'IRQ')
-            if self._valid_interrupts(nmi, reset, irq):
+            # no need to prefix the labels if there are fixed banks
+            prefix = f'b{self.number}_' if not self._fixed else ''
+            nmi = Word(len(self) - 6, self, *interrupts[:2], f'{prefix}NMI')
+            reset = Word(len(self) - 4, self, *interrupts[2:4], f'{prefix}RESET')
+            irq = Word(len(self) - 2, self, *interrupts[4:], f'{prefix}IRQ')
+            if self.base == 0x10000 - len(self): # and self._valid_interrupts(nmi, reset, irq):
                 self.components.append(nmi)
-                instr = self.find_instr(nmi.addr)
-                if instr:
-                    nmi.dest = instr.get_label()
                 self.components.append(reset)
-                instr = self.find_instr(reset.addr)
-                if instr:
-                    reset.dest = instr.get_label()
                 self.components.append(irq)
-                instr = self.find_instr(irq.addr)
-                if instr:
-                    irq.dest = instr.get_label()
             else:
                 if type(self.components[-1]) is Table:
                     t = self.components[-1]
@@ -217,61 +214,41 @@ class Bank:
                     self.components[-2].extend(self.components[-1])
                     self.components = self.components[:-1]
 
-    def _add_labels(self):
-        for c in self.components:
-            if type(c) is Subroutine:
-                for i in c.instructions:
-                    if i.type == OpType.BRANCH:
-                        b1 = bytes(i)[1]
-                        dest = i.position + 2 + (b1 if b1 < 128 else b1 - 256)
-                        target = self.find_instr(dest)
-                        if target:
-                            i.dest = target.get_label()
-                    elif i.op in ('jmp','jsr') and i.type == OpType.ABSOLUTE:
-                        dest = bytes(i)[2] << 8 | bytes(i)[1]
-                        target = self.find_instr(dest)
-                        if target:
-                            i.dest = target.get_label()
-
-
-    def find_instr(self, position) -> 'Instruction':
+    def find_component(self, addr:int) -> Any:
         """
-        Finds the instruction at the specified address
+        Finds the component at the specified address
 
-        :param position: The address of the instruction.
+        :param addr: The address of the component.
 
-        :return: The requested instruction, or None if no instruction exists at
+        :return: The requested component, or None if no instruction exists at
             that address.
         """
         for c in self.components:
-            if type(c) is Subroutine:
-                for i in c.instructions:
-                    if i.position == position:
-                        return i
-                    elif i.position > position:
-                        return None
+            if addr >= c.position and addr < c.position + len(c):
+                return c
         return None
 
-    def find_table(self, position) -> 'Table':
+
+    def find_label(self, addr:int) -> str:
         """
-        Finds the instruction at the specified address
+        Finds the component at the specified address and returns its label. If
+        no such component exists, the hex address is returned.
 
-        :param position: The address of the instruction.
+        :param position: The address of the component.
 
-        :return: The requested instruction, or None if no instruction exists at
+        :return: The requested label, or a hex address if no component exists at
             that address.
         """
-        for c in self.components:
-            if type(c) is Table:
-                if c.position == position:
-                        return c
-        return None
+        c = self.find_component(addr)
+        if c:
+            return f'{c.get_label(addr)}'
+        return f'${addr:04x}'
 
     def find_base(self):
         """
         Attempts to find the base address based on jump addresses in this bank.
         """
-        bases = list(range(0x8000, 0x10001, len(self)))
+        bases = list(range(0x8000, 0x10001 - len(self) * self._fixed, len(self)))
         if type(self.components[-1]) is not Word:
             bases = bases[:-1] # no interrupt vectors, can't be the last bank
         bins = [0] * (len(bases) - 1)
@@ -325,7 +302,6 @@ class Instruction:
         b2 = _bytes[2] if len(_bytes) > 2 else None
         self._size = 0
         self.label = ''
-        self.dest = ''
 
         self.op = ''
         self.comment = ''
@@ -359,7 +335,6 @@ class Instruction:
         elif b1 is not None and self.branch(self.opcode):
             self.type = OpType.BRANCH
             self._size = 2
-            self.dest = f'${position + 2 + (b1 if b1 < 128 else b1 - 256):04X}'
 
         elif b2 is not None and self.absolute(self.opcode):
             self.type = OpType.ABSOLUTE
@@ -514,7 +489,7 @@ class Instruction:
             return True
         return False
 
-    def get_label(self):
+    def get_label(self, addr):
         """
         Creates a label for this instruction if one does not exist and returns
         it.
@@ -522,7 +497,10 @@ class Instruction:
         :return: The instruction label
         """
         self.label = f'b{self.bank.number}_{self.position:04x}'
-        return self.label
+        offset = ''
+        if addr != self.position:
+            offset = f'+{addr - self.position}'
+        return f'{self.label}{offset}'
 
     def __bool__(self):
         return bool(self.op)
@@ -557,7 +535,8 @@ class Instruction:
         if self.type == OpType.IMMMEDIATE:
                 buf.write(f'{self.op} #${b1:02x}')
         if self.type == OpType.BRANCH:
-            buf.write(f'{self.op} {self.dest}')
+            dest = self.position + 2 + (b1 if b1 < 128 else b1 - 256)
+            buf.write(f'{self.op} {self.bank.find_label(dest)}')
 
         if self.type == OpType.ZEROPAGE:
             if self.indexing == Indexing.NONE:
@@ -566,26 +545,24 @@ class Instruction:
                 buf.write(f'{self.op} ${b1:02x},{self.indexing}')
         if self.type == OpType.ABSOLUTE:
             addr = (b2 << 8) | b1
-            if self.op in ('jmp','jsr') and self.dest:
-                buf.write(f'{self.op} {self.dest}')
+#             if self.op in ('jmp','jsr') and self.dest:
+#                 buf.write(f'{self.op} {self.dest}')
+#             else:
+            if not b2:
+                buf.seek(buf.tell() - 2)
+                buf.write('; ')
+            label = self.bank.find_label(addr)
+            if addr in mmio:
+                buf.write(f'{self.op} {mmio[addr]}')
             else:
-                if not b2:
-                    buf.seek(buf.tell() - 2)
-                    buf.write('; ')
-                table = self.bank.find_table(addr)
-                if addr in mmio:
-                    buf.write(f'{self.op} {mmio[addr]}')
-                elif table:
-                    buf.write(f'{self.op} {table.get_label()}')
-                else:
-                    buf.write(f'{self.op} ${addr:04x}')
-                if self.indexing != Indexing.NONE:
-                    buf.write(f',{self.indexing}')
-                if not b2: 
-                    buf.write('     ; avoid optimization\n')
-                    line_len = buf.tell()
-                    buf.write(' ' * 12)
-                    buf.write(f'hex {self.opcode:02x} {b1:02x} {b2:02x}')
+                buf.write(f'{self.op} {label}')
+            if self.indexing != Indexing.NONE:
+                buf.write(f',{self.indexing}')
+            if not b2: 
+                buf.write('     ; avoid optimization\n')
+                line_len = buf.tell()
+                buf.write(' ' * 12)
+                buf.write(f'hex {self.opcode:02x} {b1:02x} {b2:02x}')
 
         if self.type == OpType.INDIRECT:
             if self.op == 'jmp':
@@ -652,6 +629,11 @@ class Subroutine:
         """
         self.instructions.append(instruction)
 
+    def get_label(self, addr):
+        for i in self.instructions:
+            if addr >= i.position and addr < i.position + len(i):
+                return i.get_label(addr)
+
     def __bytes__(self):
         ret = bytes()
         for i in self.instructions:
@@ -678,6 +660,7 @@ class Table:
         self._bytes = bytes(_bytes)
         self.position = position
         self.bank = bank
+        self.label = ''
 
     def append(self, byte:int):
         """
@@ -694,13 +677,17 @@ class Table:
         """
         self._bytes += bytes(_bytes)
 
-    def get_label(self):
+    def get_label(self, addr):
         """
         Gets the label for this table if one does not exist and returns it.
 
         :return: The instruction label
         """
-        return f'tab_b{self.bank.number}_{self.position:04x}'
+        self.label = f'tab_b{self.bank.number}_{self.position:04x}'
+        offset = ''
+        if addr != self.position:
+            offset = f'+{addr - self.position}'
+        return f'{self.label}{offset}'
 
     def __bytes__(self):
         return self._bytes
@@ -709,7 +696,9 @@ class Table:
         buf = StringIO()
         source_pos = self.position % len(self.bank)
         source_pos += len(self.bank) * self.bank.number
-        buf.write(f'{self.get_label()}:\n')
+        if self.label:
+            buf.write(f'{self.label}: ')
+            buf.write(f'; {len(self)} bytes\n')
         last_line = buf.tell()
         for i in range(0, len(self._bytes), 16):
             buf.write(' ' * 12)
@@ -729,14 +718,29 @@ class Word:
     An assembly  WORD. This is only used for NMI, RESET, and IRQ vectors in the
     disassembler.
     """
-    def __init__(self, position, bank, b1, b2, comment=''):
+    def __init__(self, position, bank, b1, b2, label='', comment=''):
         self.position = position
         self.bank = bank
         self.b1 = b1
         self.b2 = b2
         self.addr = b2 << 8 | b1
-        self.dest = ''
         self.comment = comment
+        self.label = label 
+
+    def get_label(self, addr):
+        """
+        Creates a label for this word if one does not exist and returns
+        it.
+
+        :return: The instruction label
+        """
+        if label:
+            offset = ''
+            if addr != self.position:
+                offset = f'+{addr - self.position}'
+            return f'{self.label}{offset}'
+        return f'${addr:04x}'
+
 
     def __bytes__(self):
         return bytes((self.b1, self.b2))
@@ -745,11 +749,12 @@ class Word:
         source_pos = self.position % len(self.bank)
         source_pos += len(self.bank) * self.bank.number
         buf = StringIO()
-        if self.dest:
-            buf.write(f'        .word {self.dest}'.ljust(28))
+        if self.label:
+            buf.write(f'{self.label}:'.ljust(12))
         else:
-            buf.write(f'        .word ${self.addr:04x}'.ljust(28))
-        buf.write(f'; {self.comment:10s}  {source_pos:05X}: {self.b1:02x} {self.b2:02x}\n')
+            buf.write(' ' * 12)
+        buf.write(f'word {self.bank.find_label(self.addr)}'.ljust(28))
+        buf.write(f'; {source_pos:05X}: {self.b1:02x} {self.b2:02x}     {self.comment}\n')
         buf.seek(0)
         return buf.read()
 
@@ -772,7 +777,7 @@ class Header:
             buf.write(f';  HEADER - MAPPER {self.mapper} - {mappers[self.mapper][0]}\n')
         else:
             buf.write(f';  HEADER - MAPPER {self.mapper}\n')
-        buf.write('        .db "NES", $1a\n')
+        buf.write( '        .db "NES", $1a\n')
         buf.write(f'        .db {self._bytes[ 4]:d}  ; PRG ROM banks\n')
         buf.write(f'        .db {self._bytes[ 5]:d}  ; CHR ROM banks\n')
         buf.write(f'        .db ${self._bytes[ 6]:02x} ; Mapper, mirroring, battery, trainer\n')
@@ -812,7 +817,7 @@ def main():
                 stderr.write(f'ROM uses mapper {header.mapper} '
                     f'- {mappers[header.mapper][0]}\n')
         if bank_size < 0:
-            print(f'Unknown mapper {header.mapper}, please specify bank size.')
+            stderr.write(f'Unknown mapper {header.mapper}, please specify bank size.\n')
             exit(-1)
         stderr.write(f'Using bank size of {bank_size//1024}K\n')
         if fixed_banks < 0:
@@ -827,11 +832,11 @@ def main():
         for i in range(bank_count):
             rom = f.read(bank_size)
             base = 0
-            if bank_size == 0x8000:
+            if bank_size == 0x8000: # 32K banks can only be loaded at 0x8000
                 base = 0x8000
             elif i >= fixed_bank_start:
                 base = 0x10000 - (bank_size * (bank_count - i))
-            banks.append(Bank(i, base, rom))
+            banks.append(Bank(i, base, rom, fixed_banks))
         incbin = f.read()
     main_asm = stdout
     if not args.stdout:
@@ -841,15 +846,17 @@ def main():
 
     if args.stdout:
         for b in banks:
-            stdout.write(f'{b}\n\n')
+            stdout.write(str(b))
+            stdout.write('\n\n')
     else:
         for b in banks:
             with open(f'bank_{b.number:02d}.asm', 'w') as asm:
                 asm.write(str(b))
                 main_asm.write(f'        .include bank_{b.number:02d}.asm\n')
-    with open('chr_rom.bin', 'wb') as chr_rom:
-        chr_rom.write(incbin)
-    main_asm.write('        .incbin chr_rom.bin\n')
+    if not args.no_chr:
+        with open('chr_rom.bin', 'wb') as chr_rom:
+            chr_rom.write(incbin)
+        main_asm.write('        .incbin chr_rom.bin\n')
     if not args.stdout:
         main_asm.close()
 
