@@ -99,16 +99,20 @@ mappers = {
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument('filename', help='The rom file to disassemble')
-    parser.add_argument('-b', '--bank-size', type=int, default=-1,
+    parser.add_argument('--info', action='store_true', 
+            help='Print ROM info to stderr - do not disassemble.')
+    parser.add_argument('-s', '--bank-size', type=int, default=-1,
             help='The size of the switchable bank in KB. Should be 8, 16, or 32. '
             'The default is to auto-detect based on the mapper')
+    parser.add_argument('-b', '--bank', type=int, default=-1,
+            help='Only disassemble the specified bank')
     parser.add_argument('-f', '--fixed-banks', type=int, default=-1,
             help='The number of banks which are fixed (non-swappable) at the end '
             'of PRG-ROM space. The default is to auto-detect based on the mapper')
     parser.add_argument('-m', '--min-sub-size', type=int, default=2,
             help='The minimum number of instructions for a valid subroutine. '
             'Anything smaller will be converted to a data table. Default is 2.')
-    parser.add_argument('-s', '--no-sub-check', action='store_true',
+    parser.add_argument('-n', '--no-sub-check', action='store_true',
          help='Do not attempt to analyze subroutines for validity. Some '
          'applications may intermix data and code in an odd way and confuse the '
          'analysis, resulting in valid code interpreted as data. This output will '
@@ -800,7 +804,6 @@ def write_base_asm(header, out=stdout):
         out.write(f'        {item:10s} EQU ${addr:04x}\n')
     out.write('\n')
 
-
 def main():
     args = parse_args()
     if args.no_sub_check:
@@ -819,7 +822,7 @@ def main():
         if bank_size < 0:
             stderr.write(f'Unknown mapper {header.mapper}, please specify bank size.\n')
             exit(-1)
-        stderr.write(f'Using bank size of {bank_size//1024}K\n')
+        stderr.write(f'Bank size: {bank_size//1024}KB\n')
         if fixed_banks < 0:
             if header.mapper in mappers:
                 fixed_banks = mappers[header.mapper][2]
@@ -829,9 +832,13 @@ def main():
         stderr.write(f'ROM has {bank_count} banks.\n')
         stderr.write(f'Mapper uses {fixed_banks} fixed banks.\n')
         fixed_bank_start = bank_count - fixed_banks
+        if args.info:
+            return
 
         for i in range(bank_count):
             rom = f.read(bank_size)
+            if args.bank >= 0 and i != args.bank:
+                continue
             base = 0
             if bank_size == 0x8000: # 32K banks can only be loaded at 0x8000
                 base = 0x8000
@@ -840,7 +847,9 @@ def main():
             banks.append(Bank(i, base, rom, fixed_banks))
         incbin = f.read()
     main_asm = stdout
-    if not args.stdout:
+    if args.bank >= 0:
+        main_asm = open(os.devnull, 'w')
+    elif not args.stdout:
         asmfile = f'{os.path.splitext(os.path.basename(args.filename))[0]}.asm'
         main_asm = open(asmfile, 'w')
     write_base_asm(header, main_asm)
