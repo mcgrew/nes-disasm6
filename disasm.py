@@ -46,7 +46,7 @@ mmio = {
 mappers = {
         # Name, Bank Size, Fixed bank count (at end)
     0  : ('NROM',32, 1),
-    1  : ('SxROM, MMC1', 16, 0),
+    1  : ('SxROM, MMC1', 16, 1), # Technically 0, but most configurations use 1
     2  : ('UxROM', 16, 1),
     3  : ('CNROM', 32, 1),
     4  : ('TxROM, MMC3, MMC6', 8, 2),
@@ -827,6 +827,7 @@ def main():
                 fixed_banks = 0
         bank_count = header.prg_size // bank_size
         stderr.write(f'ROM has {bank_count} banks.\n')
+        stderr.write(f'Mapper uses {fixed_banks} fixed banks.\n')
         fixed_bank_start = bank_count - fixed_banks
 
         for i in range(bank_count):

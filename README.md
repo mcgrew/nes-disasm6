@@ -4,7 +4,7 @@ This project is a 6502 disassembler focused on the NES. Generated source code
 files will compile with [asm6f](https://github.com/freem/asm6f) which should
 produce a file identical to the input file.
 
-##Usage
+## Usage
 
 ```text
   disasm.py [-h] [-b BANK_SIZE] [-f FIXED_BANKS] [-m MIN_SUB_SIZE] [-s]
