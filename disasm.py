@@ -715,11 +715,15 @@ class Table:
             buf.write(f'{self.label}: ')
             buf.write(f'; {len(self)} bytes\n')
         last_line = buf.tell()
-        for i in range(0, len(self._bytes), 16):
+        for i in range(0, len(self._bytes), 8):
+            byte_string = f'{" ".join([f"{x:02x}" for x in self._bytes[i:i+8]])}'
             buf.write(' ' * 12)
-            buf.write(f'hex {" ".join([f"{x:02x}" for x in self._bytes[i:i+16]])}')
-            buf.write(' ' * (64 + last_line - buf.tell()))
-            buf.write(f'  ; {source_pos + i:05X}\n')
+            buf.write('hex ')
+            buf.write(byte_string)
+            buf.write(' ' * (40 + last_line - buf.tell()))
+            buf.write(f'; {source_pos + i:05X}:  ')
+            buf.write(byte_string)
+            buf.write('\n')
             last_line = buf.tell()
         buf.write('\n')
         buf.seek(0)
@@ -769,7 +773,10 @@ class Word:
         else:
             buf.write(' ' * 12)
         buf.write(f'word {self.bank.find_label(self.addr)}'.ljust(28))
-        buf.write(f'; {source_pos:05X}: {self.b1:02x} {self.b2:02x}     {self.comment}\n')
+        buf.write(f'; {source_pos:05X}: {self.b1:02x} {self.b2:02x}')
+        if self.comment:
+            buf.write(f'     {self.comment}')
+        buf.write('\n')
         buf.seek(0)
         return buf.read()
 
