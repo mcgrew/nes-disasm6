@@ -112,6 +112,10 @@ def parse_args():
     parser.add_argument('-m', '--min-sub-size', type=int, default=2,
             help='The minimum number of instructions for a valid subroutine. '
             'Anything smaller will be converted to a data table. Default is 2.')
+    parser.add_argument('-v', '--sub-valid-end', help='Adds extra valid endings '
+            "for a subroutine. Normally 'jmp' and 'rts' are the only valid "
+            'endings. Should be a comma-separated list of strings to look '
+            'for in the final instruction')
     parser.add_argument('-n', '--no-sub-check', action='store_true',
          help='Do not attempt to analyze subroutines for validity. Some '
          'applications may intermix data and code in an odd way and confuse the '
@@ -598,8 +602,10 @@ class Subroutine:
     """
     An assembly subroutine.
     """
+    valid_end:list = []
     always_valid:bool = False
     min_size:int = 2
+
     def __init__(self, bank:Bank, position:int):
         if position < 0:
             raise ValueError("Subroutine address cannot be negative.")
@@ -613,7 +619,13 @@ class Subroutine:
         subroutine ends with either a 'jmp' or 'rts' instruction to avoid
         executing invalid code.
         """
-        return self.instructions[-1].op in ('rts', 'jmp')
+        last_instr = self.instructions[-1]
+        if last_instr.op in ('rts', 'jmp'):
+            return True
+        for v in Subroutine.valid_end:
+            if v in str(last_instr):
+                return True
+        return False
 
     def is_valid(self):
         """
@@ -622,8 +634,7 @@ class Subroutine:
         executing invalid code. The behavior of this method can be influenced by
         command line flags
         """
-        return len(self.instructions) >= Subroutine.min_size and \
-            (Subroutine.always_valid or self.instructions[-1].op in ('rts', 'jmp'))
+        return len(self.instructions) >= Subroutine.min_size and self.is_complete()
 
     def append(self, instruction:Instruction):
         """
@@ -808,6 +819,8 @@ def main():
     args = parse_args()
     if args.no_sub_check:
         Subroutine.always_valid = True
+    if args.sub_valid_end:
+        Subroutine.valid_end = args.sub_valid_end.split(',')
     Subroutine.min_size = args.min_sub_size
     banks = []
     bank_size = args.bank_size
