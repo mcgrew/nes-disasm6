@@ -667,7 +667,6 @@ class Subroutine:
 
     def __str__(self):
         buf = StringIO()
-#         buf.write(f'sub_b{self.bank.number}_{self.position:04x}:\n')
         for i in self.instructions:
             buf.write(str(i))
         buf.write('\n')
