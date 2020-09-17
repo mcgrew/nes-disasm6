@@ -181,7 +181,7 @@ class Bank:
                 i += len(instr)
             else:
                 if len(self.components) and type(self.components[-1]) is Subroutine:
-                    self._merge_tables()
+                    self._merge_invalid()
                 if not len(self.components) or type(self.components[-1]) is not Table:
                     self.components.append(Table(i + self.base, self))
                 self.components[-1].append(bank_bytes[i])
@@ -213,10 +213,10 @@ class Bank:
             return False
         return True
 
-    def _merge_tables(self):
+    def _merge_invalid(self):
         if len(self.components):
             c = self.components[-1]
-            if not c.is_valid():
+            if type(c) is Subroutine and not c.is_valid():
                 self.components[-1] = Table(c.position, self, c)
                 while len(self.components) > 1 and type(self.components[-2]) is Table:
                     self.components[-2].extend(self.components[-1])
@@ -634,6 +634,9 @@ class Subroutine:
         executing invalid code. The behavior of this method can be influenced by
         command line flags
         """
+#         if not (len(self.instructions) >= Subroutine.min_size and self.is_complete()):
+#             stderr.write(f"INVALID - length {len(self.instructions)}\n")
+#             stderr.write(str(self))
         return len(self.instructions) >= Subroutine.min_size and self.is_complete()
 
     def append(self, instruction:Instruction):
