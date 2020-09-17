@@ -322,7 +322,7 @@ class Instruction:
 
         elif self.implied(self.opcode):
             self.type = OpType.IMPLIED
-            self._size = 1
+            self._size = 1 if self.opcode else 2
 
         elif self.accumulator(self.opcode):
             self.type = OpType.ACCUMULATOR
@@ -536,6 +536,10 @@ class Instruction:
 
         if self.type == OpType.IMPLIED:
             buf.write(self.op)
+            if not self.opcode: # brk command
+                buf.write('\n')
+                buf.write(' ' * 12)
+                buf.write(f'hex {self.bytes[1]}'
 
         if self.type == OpType.ACCUMULATOR:
             buf.write(f'{self.op} a')
