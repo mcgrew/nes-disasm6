@@ -855,7 +855,9 @@ def main():
             else:
                 fixed_banks = 0
         bank_count = header.prg_size // bank_size
-        stderr.write(f'ROM has {bank_count} banks.\n')
+        stderr.write(f'ROM has {bank_count} PRG banks {header.prg_size//1024}KB.\n')
+        chr_rom_count = header.chr_size // (8 * 1024)
+        stderr.write(f'ROM has {chr_rom_count} CHR banks {header.chr_size//1024}KB.\n')
         stderr.write(f'Mapper uses {fixed_banks} fixed banks.\n')
         fixed_bank_start = bank_count - fixed_banks
         if args.info:
