@@ -853,6 +853,9 @@ def main():
     Subroutine.min_size = args.min_sub_size
     banks = []
     bank_size = args.bank_size
+    if bank_size not in (-1, 8, 16, 32):
+        stderr.write('Invalid bank size. Should be either 8, 16, or 32.')
+        exit(-1)
     fixed_banks = args.fixed_banks
     with open(args.filename, 'rb') as f:
         header = Header(f.read(16))
