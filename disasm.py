@@ -45,17 +45,17 @@ mmio = {
 
 mappers = {
         # Name, Bank Size, Fixed bank count (at end)
-    0  : ('NROM',32, 1),
-    1  : ('SxROM, MMC1', 16, 1), # Technically 0, but most configurations use 1
+    0  : ('NROM',16, 2),
+    1  : ('SxROM, MMC1', 16, 1), # Technically 0 fixed, but most configurations use 1
     2  : ('UxROM', 16, 1),
-    3  : ('CNROM', 32, 1),
+    3  : ('CNROM', 16, 2),
     4  : ('TxROM, MMC3, MMC6', 8, 2),
     5  : ('ExROM, MMC5 (Contains expansion sound)', 8, 0),
     7  : ('AxROM', 32, 0),
     9  : ('PxROM, MMC2', 8, 3),
     10 : ('FxROM, MMC4', 16, 1),
     11 : ('Color Dreams', 32, 0),
-    13 : ('CPROM', 32, 1),
+    13 : ('CPROM', 16, 2),
     15 : ('100-in-1 Contra Function 16 Multicart', 8, 0),
     16 : ('Bandai EPROM (24C02)', -1, 0), # Too many submappers
     18 : ('Jaleco SS8806', 8, 1),
@@ -88,7 +88,7 @@ mappers = {
     166: ('SUBOR', 8, 0),
     167: ('SUBOR', 8, 0),
     180: ('Crazy Climber', 16, 1), #Fixed first bank
-    185: ('CNROM with protection diodes', 32, 1),
+    185: ('CNROM with protection diodes', 16, 2),
     192: ('Pirate MMC3 derivative', 8, 2),
     206: ('DxROM, Namco 118 / MIMIC-1', 8, 2),
     210: ('Namco 175 and 340 (Namco 163 with different mirroring)', 8, 1),
@@ -856,6 +856,7 @@ def main():
     if bank_size not in (-1, 8, 16, 32):
         stderr.write('Invalid bank size. Should be either 8, 16, or 32.')
         exit(-1)
+    bank_size *= 1024
     fixed_banks = args.fixed_banks
     with open(args.filename, 'rb') as f:
         header = Header(f.read(16))
