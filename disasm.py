@@ -320,9 +320,14 @@ class Instruction:
             self.op = 'jmp'
             self._size = 3
 
+        if b2 is not None and self.opcode == 0x00:
+            self.type = OpType.IMPLIED
+            self.op = 'brk'
+            self._size = 2
+
         elif self.implied(self.opcode):
             self.type = OpType.IMPLIED
-            self._size = 1 if self.opcode else 2
+            self._size = 1
 
         elif self.accumulator(self.opcode):
             self.type = OpType.ACCUMULATOR
@@ -363,8 +368,6 @@ class Instruction:
             self.op = (( 'php', 'clc', 'plp', 'sec', 'pha', 'cli', 'pla', 'sei',
                 'dey', 'tya', 'tay', 'clv', 'iny', 'cld', 'inx', 'sed')
                 [opcode >> 4])
-        if opcode == 0x00:
-            self.op = 'brk'
         if opcode == 0x40:
             self.op = 'rti'
         if opcode == 0x60:
@@ -522,6 +525,8 @@ class Instruction:
     def __str__(self):
         if not self.op:
             return ''
+        source_pos = self.position % len(self.bank)
+        source_pos += len(self.bank) * self.bank.number
         b1 = self._bytes[1] if len(self._bytes) > 1 else None
         b2 = self._bytes[2] if len(self._bytes) > 2 else None
         buf = StringIO()
@@ -534,12 +539,19 @@ class Instruction:
         else:
             buf.write(' ' * 12)
 
+        if not self.opcode: #brk instruction
+            buf.write(self.op)
+            buf.write(' ' * 25)
+            buf.write(f'; {source_pos:05X}:  00\n')
+            buf.write(' ' * 12)
+            buf.write(f'hex {self._bytes[1]:02x}')
+            buf.write(' ' * 22)
+            buf.write(f'; {source_pos+1:05X}:  {self._bytes[1]:02x}\n')
+            buf.seek(0)
+            return buf.read()
+
         if self.type == OpType.IMPLIED:
             buf.write(self.op)
-            if not self.opcode: # brk command
-                buf.write('\n')
-                buf.write(' ' * 12)
-                buf.write(f'hex {self.bytes[1]}'
 
         if self.type == OpType.ACCUMULATOR:
             buf.write(f'{self.op} a')
@@ -586,8 +598,6 @@ class Instruction:
             elif self.indexing == Indexing.Y:
                 buf.write(f'{self.op} (${b1:02x}),y')
 
-        source_pos = self.position % len(self.bank)
-        source_pos += len(self.bank) * self.bank.number
         buf.write(' ' * (40 + line_len - buf.tell()))
         buf.write(f'; {source_pos:05X}:  ')
         buf.write(' '.join([f'{x:02x}' for x in self._bytes]))
