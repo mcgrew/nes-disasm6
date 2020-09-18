@@ -170,19 +170,25 @@ class Bank:
 
     def _disassemble(self, bank_bytes:bytes, interrupts:bytes=bytes()):
         self.components.clear()
-        last_instr = i = 0
+        i = 0
         while i < len(bank_bytes):
             instr = Instruction(i + self.base, self, bank_bytes[i:i+3])
             if instr:
-                if not len(self.components) or type(self.components[-1]) is not Subroutine \
-                        or self.components[-1].is_complete():
+                if not len(self.components):
+                    self.components.append(Subroutine(self, instr.position))
+                elif type(self.components[-1]) is not Subroutine:
+                    self.components.append(Subroutine(self, instr.position))
+                elif self.components[-1].is_complete():
+                    self._merge_invalid()
                     self.components.append(Subroutine(self, instr.position))
                 self.components[-1].append(instr)
                 i += len(instr)
             else:
-                if len(self.components) and type(self.components[-1]) is Subroutine:
+                if not len(self.components):
+                    self.components.append(Table(i + self.base, self))
+                elif type(self.components[-1]) is Subroutine:
                     self._merge_invalid()
-                if not len(self.components) or type(self.components[-1]) is not Table:
+                if type(self.components[-1]) is not Table:
                     self.components.append(Table(i + self.base, self))
                 self.components[-1].append(bank_bytes[i])
                 i += 1
@@ -206,12 +212,12 @@ class Bank:
                 t.extend(reset)
                 t.extend(irq)
 
-    def _valid_interrupts(self, nmi, reset, irq):
-        if nmi.addr < 0x8000 or reset.addr < 0x8000 or irq.addr < 0x8000:
-            return False
-        if nmi.addr >= 0xfffa or reset.addr >= 0xfffa or irq.addr >= 0xfffa:
-            return False
-        return True
+#      def _valid_interrupts(self, nmi, reset, irq):
+#          if nmi.addr < 0x8000 or reset.addr < 0x8000 or irq.addr < 0x8000:
+#              return False
+#          if nmi.addr >= 0xfffa or reset.addr >= 0xfffa or irq.addr >= 0xfffa:
+#              return False
+#          return True
 
     def _merge_invalid(self):
         if len(self.components):
@@ -634,7 +640,7 @@ class Subroutine:
         executing invalid code.
         """
         last_instr = self.instructions[-1]
-        if last_instr.op in ('rts', 'jmp'):
+        if last_instr.op in ('rts', 'rti', 'jmp'):
             return True
         for v in Subroutine.valid_end:
             if v in str(last_instr):
