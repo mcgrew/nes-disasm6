@@ -575,12 +575,6 @@ class Instruction:
                 buf.write(f'{self.op} ${b1:02x},{self.indexing}')
         if self.type == OpType.ABSOLUTE:
             addr = (b2 << 8) | b1
-#             if self.op in ('jmp','jsr') and self.dest:
-#                 buf.write(f'{self.op} {self.dest}')
-#             else:
-            if not b2:
-                buf.seek(buf.tell() - 2)
-                buf.write('; ')
             if self.op in ('sta', 'stx', 'sty', 'dec', 'inc'):
                 label = f'${addr:04x}'
             else:
@@ -592,10 +586,10 @@ class Instruction:
             if self.indexing != Indexing.NONE:
                 buf.write(f',{self.indexing}')
             if not b2: 
-                buf.write('     ; avoid optimization\n')
-                line_len = buf.tell()
-                buf.write(' ' * 12)
-                buf.write(f'hex {self.opcode:02x} {b1:02x} {b2:02x}')
+                buf.seek(12)
+                op_comment = buf.read()
+                buf.seek(12)
+                buf.write(f'hex {self.opcode:02x} {b1:02x} {b2:02x} ; {op_comment}')
 
         if self.type == OpType.INDIRECT:
             if self.op == 'jmp':
