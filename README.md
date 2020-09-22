@@ -8,7 +8,7 @@ produce a file identical to the input file.
 
 ```text
   usage: disasm.py [-h] [--info] [-s BANK_SIZE] [-b BANK] [-f FIXED_BANKS]
-                   [-m MIN_SUB_SIZE] [-n] [-c] [--stdout]
+                   [-m MIN_SUB_SIZE] [-v SUB_VALID_END] [-n] [-c] [--stdout]
                    filename
 
   positional arguments:
@@ -30,6 +30,11 @@ produce a file identical to the input file.
                           The minimum number of instructions for a valid
                           subroutine. Anything smaller will be converted to a
                           data table. Default is 2.
+    -v SUB_VALID_END, --sub-valid-end SUB_VALID_END
+                          Adds extra valid endings for a subroutine. Normally
+                          'jmp', 'rti', and 'rts' are the only valid endings.
+                          Should be a comma-separated list of strings to look
+                          for in the final instruction
     -n, --no-sub-check    Do not attempt to analyze subroutines for validity.
                           Some applications may intermix data and code in an odd
                           way and confuse the analysis, resulting in valid code
