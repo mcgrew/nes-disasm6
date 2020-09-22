@@ -581,7 +581,10 @@ class Instruction:
             if not b2:
                 buf.seek(buf.tell() - 2)
                 buf.write('; ')
-            label = self.bank.find_label(addr)
+            if self.op in ('sta', 'stx', 'sty', 'dec', 'inc'):
+                label = f'${addr:04x}'
+            else:
+                label = self.bank.find_label(addr)
             if addr in mmio:
                 buf.write(f'{self.op} {mmio[addr]}')
             else:
