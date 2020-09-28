@@ -326,7 +326,7 @@ class Instruction:
             self.op = 'jmp'
             self._size = 3
 
-        if b2 is not None and self.opcode == 0x00:
+        elif b2 is not None and self.opcode == 0x00:
             self.type = OpType.IMPLIED
             self.op = 'brk'
             self._size = 2
