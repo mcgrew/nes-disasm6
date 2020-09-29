@@ -421,11 +421,10 @@ class Instruction:
         """
         if opcode in (0x9c, 0x9e):
             return False
-        if self._bytes[2] >= 0x60: # don't interpret jumps below 0x6000 (SRAM)
-            if opcode == 0x20:
-                self.op = 'jsr'
-            if opcode == 0x4c:
-                self.op = 'jmp'
+        if opcode == 0x20:
+            self.op = 'jsr'
+        if opcode == 0x4c:
+            self.op = 'jmp'
         if opcode & 0x1f == 0x19:
             self.op = ('ora', 'and', 'eor', 'adc', 'sta', 'lda', 'cmp', 'sbc')[opcode >> 5]
         if opcode & 0xf == 0xd:
@@ -585,7 +584,7 @@ class Instruction:
                 buf.write(f'{self.op} {label}')
             if self.indexing != Indexing.NONE:
                 buf.write(f',{self.indexing}')
-            if not b2: 
+            if not b2 and self.op not in ('jmp', 'jsr'):
                 buf.seek(12)
                 op_comment = buf.read()
                 buf.seek(12)
