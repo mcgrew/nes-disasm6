@@ -12,7 +12,10 @@ try:
 except ImportError:
     print("Unable to locate pyusb library")
 
-class OpSelect(Enum):
+SET_OPERATION = 0x00
+GET_OPERATION = 0x40 
+
+class OpType(Enum):
     IO       = 2
     NES      = 3
     SNES     = 4
@@ -31,7 +34,7 @@ class OpSelect(Enum):
     STUFF    = 17
 
 class IO(Enum):
-    def data(self, data:int=0):
+    def __call__(self, data:int=0):
         return (self.value | (data << 8)) & 0xffff
 
     IO_RESET     = 0
@@ -47,7 +50,7 @@ class IO(Enum):
     GB_POWER_3V  = 10
 
 class NES(Enum):
-    def data(self, data:int=0):
+    def __call__(self, data:int=0):
         return (self.value | (data << 8)) & 0xffff
     # ===================
     #  NES OPCODES
@@ -133,7 +136,7 @@ class NES(Enum):
     # after written read back for verification as a timeout would cause fail
 
 class Buffer(Enum):
-    def data(self, data:int=0):
+    def __call__(self, data:int=0):
         return (self.value | (data << 8)) & 0xffff
 
     RAW_BUFFER_RESET         = 0x00
@@ -188,21 +191,80 @@ class Buffer(Enum):
     BUFF_PAYLOAD6            = 0xF6
     BUFF_PAYLOAD7            = 0xF7
 
+mappers = {
+        # Name, Bank Size, PRG switch address, CHR switch address
+    0  : ('NROM', 32, 8, 0x0, 0x0),
+    1  : ('SxROM, MMC1', 16, 4, 0xffff, 0xbfff),
+    2  : ('UxROM', 16, 8, 0xffff, 0x0),
+#      3  : ('CNROM', 16),
+#      4  : ('TxROM, MMC3, MMC6', 8),
+#      5  : ('ExROM, MMC5 (Contains expansion sound)', 8),
+#      7  : ('AxROM', 32),
+#      9  : ('PxROM, MMC2', 8),
+#      10 : ('FxROM, MMC4', 16),
+#      11 : ('Color Dreams', 32),
+#      13 : ('CPROM', 16),
+#      15 : ('100-in-1 Contra Function 16 Multicart', 8),
+#      16 : ('Bandai EPROM (24C02)', -1),
+#      18 : ('Jaleco SS8806', 8),
+#      19 : ('Namco 163', 8),
+#      21 : ('VRC4a, VRC4c', 8),
+#      22 : ('VRC2a', 8),
+#      23 : ('VRC2b, VRC4e', 8),
+#      24 : ('VRC6a (Contains expansion sound)', 8),
+#      25 : ('VRC4b, VRC4d', 8),
+#      26 : ('VRC6b (Contains expansion sound)', 8),
+#      34 : ('BNROM, NINA-001', 32),
+#      64 : ('RAMBO-1 (MMC3 clone with extra features)', 8),
+#      66 : ('GxROM, MxROM', 32),
+#      68 : ('After Burner', 16),
+#      69 : ('FME-7, Sunsoft 5B', 8),
+#      71 : ('Camerica/Codemasters (Similar to UNROM)', 16),
+#      73 : ('VRC3', 16),
+#      74 : ('Pirate MMC3 derivative', 8),
+#      75 : ('VRC1', 8),
+#      76 : ('Namco 109 variant', 8),
+#      79 : ('NINA-03/NINA-06', 32),
+#      85 : ('VRC7', 8),
+#      86 : ('JALECO-JF-13', 32),
+#      94 : ('Senjou no Ookami', 16),
+#      105: ('NES-EVENT (Similar to MMC1)', 16),
+#      113: ('NINA-03/NINA-06??', 32),
+#      118: ('TxSROM, MMC3', 8),
+#      119: ('TQROM, MMC3', 8),
+#      159: ('Bandai EPROM', -1),
+#      166: ('SUBOR', 8),
+#      167: ('SUBOR', 8),
+#      180: ('Crazy Climber', 16), #Fixed first bank
+#      185: ('CNROM with protection diodes', 16),
+#      192: ('Pirate MMC3 derivative', 8),
+#      206: ('DxROM, Namco 118 / MIMIC-1', 8),
+#      210: ('Namco 175 and 340', 8),
+#      228: ('Action 52', 16),
+#      232: ('Camerica/Codemasters Quattro', 16),
+}
+
 class INLRetro:
-    def __init__(self):
+    def __init__(self, mapper:int=0):
+        if mapper not in mappers:
+            raise IndexError(f'Mapper {mapper} is not supported')
         self.device = usb.core.find(idVendor=0x16c0, idProduct=0x05dc)
+        self.mapper = mapper
+        self.mapper_name, self.bank_size, self.chr_bank_size, self.prg_sw, self.chr_sw = \
+                mappers[mapper]
+        self.need_bank_swap = self.bank_size != 32
 
         if self.device is None:
             raise IOError("Unable to locate INLretro device. Be sure it is connected properly.")
         sys.stderr.write("Found INLRetro device.\n")
 
         self.device.set_configuration()
-        self.do(OpSelect.IO, IO.IO_RESET.data(0x00), 0x0000, 1)
-        self.do(OpSelect.IO, IO.NES_INIT.value, 0x0000, 1)
-#          self.do(OpSelect.IO, IO.IO_RESET.data(0x00), 0x0000, 1)
-#          self.do(OpSelect.IO, IO.NES_INIT.value, 0x0000, 1)
+        self.do(OpType.IO, IO.IO_RESET(0x00), 0x0000, 1)
+        self.do(OpType.IO, IO.NES_INIT(), 0x0000, 1)
+        self._mapper_init()
+        sys.stderr.write(f'Ready to read {self.mapper_name} board...\n')
 
-    def do(self, select:OpSelect, op_misc, addr, returnLength):
+    def do(self, select:OpType, op_misc, addr, returnLength):
         response = self.device.ctrl_transfer(
             0xc0, select.value, op_misc, addr, returnLength)[0]
         if response:
@@ -210,89 +272,118 @@ class INLRetro:
 
     def get_buffer(self):
         return bytearray(self.device.ctrl_transfer(
-            0xc0, OpSelect.BUFFER.value, Buffer.BUFF_PAYLOAD.value, 0x0000, 128))
+            0xc0, OpType.BUFFER.value, Buffer.BUFF_PAYLOAD(), 0x0000, 128))
 
-    def set_bank(self):
-        self.do(OpSelect.NES,    0x0081, 0x8000, 3)
-        self.do(OpSelect.NES,    0x8002, 0x8000, 1)
-        self.do(OpSelect.NES,    0x1004, 0x8000, 1)
-        self.do(OpSelect.NES,    0x1004, 0xe000, 1)
-        self.do(OpSelect.NES,    0x1204, 0xa000, 1)
-        self.do(OpSelect.NES,    0x1504, 0xc000, 1)
-        self.do(OpSelect.NES,    0x0004, 0xe000, 1)
+    def set_prg_bank(self, bank):
+        if self.prg_sw:
+            sys.stderr.write(f"Swapping in PRG bank {bank}...\n")
+            if self.mapper in (1, 105, 155):
+                self.do(OpType.NES, NES.NES_MMC1_WR(bank), self.prg_sw, 1)
+            else:
+                self.do(OpType.NES, NES.NES_CPU_WR(bank), self.prg_sw, 1)
 
-    def init_chr_dump(self):
-        sys.stderr.write("Dumping CHR ROM...\n")
-        self.do(OpSelect.OPER,   0x0000, 0x0001, 1)
-        self.do(OpSelect.BUFFER, 0x0000, 0x0000, 1)
-        self.do(OpSelect.BUFFER, 0x0480, 0x0000, 1)
-        self.do(OpSelect.BUFFER, 0x0481, 0x8004, 1)
-        self.do(OpSelect.BUFFER, 0x0190, 0x0000, 1)
-        self.do(OpSelect.BUFFER, 0x0191, 0x0000, 1)
-        self.do(OpSelect.BUFFER, 0x0030, 0x21dd, 1)
-        self.do(OpSelect.BUFFER, 0x0130, 0x21dd, 1)
-        self.do(OpSelect.BUFFER, 0x0032, 0x0000, 1)
-        self.do(OpSelect.BUFFER, 0x0132, 0x0000, 1)
-        self.do(OpSelect.OPER,   0x0000, 0x00d2, 1)
+    def set_chr_bank(self, bank):
+        if self.chr_sw:
+            sys.stderr.write(f"Swapping in CHR bank {bank}...\n")
+            if self.mapper in (1, 105, 155):
+                self.do(OpType.NES, NES.NES_MMC1_WR(bank), self.chr_sw, 1)
+            else:
+                self.do(OpType.NES, NES.NES_CPU_WR(bank), self.chr_sw, 1)
 
-    def init_prg_dump(self):
-        sys.stderr.write("Dumping PRG ROM...\n")
-        self.do(OpSelect.OPER,   0x0000, 0x0001, 1)
-        self.do(OpSelect.BUFFER, 0x0000, 0x0000, 1)
-        self.do(OpSelect.BUFFER, 0x0480, 0x0000, 1)
-        self.do(OpSelect.BUFFER, 0x0481, 0x8004, 1)
-        self.do(OpSelect.BUFFER, 0x0190, 0x0000, 1)
-        self.do(OpSelect.BUFFER, 0x0191, 0x0000, 1)
-        self.do(OpSelect.BUFFER, 0x0030, 0x20dd, 1)
-        self.do(OpSelect.BUFFER, 0x0130, 0x20dd, 1)
-        self.do(OpSelect.BUFFER, 0x0032, 0x0800, 1)
-        self.do(OpSelect.BUFFER, 0x0132, 0x0800, 1)
-        self.do(OpSelect.OPER,   0x0000, 0x00d2, 1)
+    def _init_dump(self, n_part_data_addr, n_mapvar_data_addr):
+        self.do(OpType.OPER,   SET_OPERATION, 0x0001, 1)
+        self.do(OpType.BUFFER, Buffer.RAW_BUFFER_RESET(), 0x0000, 1)
+        self.do(OpType.BUFFER, Buffer.ALLOCATE_BUFFER0(4), 0x0000, 1)
+        self.do(OpType.BUFFER, Buffer.ALLOCATE_BUFFER1(4), 0x8004, 1)
+        self.do(OpType.BUFFER, Buffer.SET_RELOAD_PAGENUM0(1), 0x0000, 1)
+        self.do(OpType.BUFFER, Buffer.SET_RELOAD_PAGENUM1(1), 0x0000, 1)
+        self.do(OpType.BUFFER, Buffer.SET_MEM_N_PART(0), n_part_data_addr, 1)
+        self.do(OpType.BUFFER, Buffer.SET_MEM_N_PART(1), n_part_data_addr, 1)
+        self.do(OpType.BUFFER, Buffer.SET_MAP_N_MAPVAR(0), n_mapvar_data_addr, 1)
+        self.do(OpType.BUFFER, Buffer.SET_MAP_N_MAPVAR(1), n_mapvar_data_addr, 1)
+        self.do(OpType.OPER,   SET_OPERATION, 0x00d2, 1)
 
-    def dump(self, io, size):
-        for i in range(size//128):
-            self.do(OpSelect.BUFFER,  0x0061, 0x0000, 3)
+    def _init_chr_dump(self):
+        self._init_dump(0x21dd, 0x0000)
+
+    def _init_prg_dump(self):
+        self._init_dump(0x20dd, 0x0800)
+
+    def _dump(self, io, size):
+        for i in range(size * 8):
+            self.do(OpType.BUFFER,  0x0061, 0x0000, 3)
             io.write(self.get_buffer())
 
-    def dump_full(self, io, prg_size, chr_size):
-        self.init_prg_dump()
-        self.dump(io, prg_size)
-        self.init_chr_dump()
-        self.dump(io, chr_size)
+    def _mapper_init(self):
+        if self.mapper in (1, 105, 155):
+            self.do(OpType.NES, NES.NES_MMC1_WR(0x1c), 0x9fff, 1)
 
-def hash_buf(buf):
+    def dump_full(self, io, prg_size, chr_size):
+        sys.stderr.write("Dumping PRG ROM...\n")
+        for i in range(prg_size // self.bank_size):
+            self.set_prg_bank(i)
+            self._init_prg_dump()
+            self._dump(io, self.bank_size)
+        sys.stderr.write("Dumping CHR ROM...\n")
+        for i in range(chr_size // self.chr_bank_size):
+            self.set_chr_bank(i)
+            self._init_chr_dump()
+            self._dump(io, self.chr_bank_size)
+
+    def dump_and_verify(self, io, prg_size, chr_size):
+        self.dump_full(io, prg_size, chr_size)
+        digest = get_hash(io)
+        sys.stderr.write(f'Hash: {digest}\n')
+        if digest in known_md5:
+            sys.stderr.write("Matched known hash.\n")
+        else:
+            sys.stderr.write("Did not match a known hash, rereading...\n")
+            last_digest = digest
+            buf = BytesIO()
+            self.dump_full(buf, prg_size, chr_size)
+            digest = get_hash(buf)
+            sys.stderr.write(f'Hash: {digest}\n')
+            if digest == last_digest:
+                sys.stderr.write("Hash matches previous read but not a known hash.\n")
+                sys.stderr.write("This likely indicates the cartridge is not "
+                    "seated properly.\n")
+                return 1
+            else:
+                sys.stderr.write("Second read did not match the first!\n")
+                sys.stderr.write("Please make sure the cartridge is seated "
+                    "properly and try again.\n")
+                return -1
+        return 0
+
+def get_hash(buf):
     buf.seek(0)
     _hash = md5()
     _hash.update(buf.read())
     return _hash.hexdigest()
 
 def main():
-    i = INLRetro()
+    MAPPER = 1
+    PRG_SIZE = 64
+    CHR_SIZE = 16
+
+    inlretro = INLRetro(MAPPER)
     buf = BytesIO()
+#      buf.write(b'NES\x1a\x04\x02\x12\0\0\0\0\0\0\0\0\0')
+#      inlretro.dump_full(buf, PRG_SIZE, CHR_SIZE)
+#      with open('dump.nes', 'wb') as f:
+#          buf.seek(0)
+#          f.write(buf.read())
+    
 
-    i.dump_full(buf, 32768, 8192)
-    digest = hash_buf(buf)
-    if digest in known_md5:
-        print("Matched known hash.")
-    else:
-        print("Did not match a known hash, rereading...")
-        last_digest = digest
-        buf = BytesIO()
-        i.dump_full(buf, 32768, 8192)
-        digest = hash_buf(buf)
-        if digest == last_digest:
-            print("Hash matches previous read but not a known hash.")
-            print("This likely indicates the cartridge is not seated properly.")
-            answer = input("Proceed anyway? (y/n)")
-            if answer[0].lower() != 'y':
-                return
-        else:
-            print("Second read did not match the first!")
-            print("Please make sure the cartridge is seated properly and try again.")
+    fail = inlretro.dump_and_verify(buf, PRG_SIZE, CHR_SIZE)
+    if fail < 0:
+        return
+    elif fail > 0:
+        sys.stderr.write("Proceed anyway? (y/n) ")
+        answer = input()
+        if answer[0].lower() != 'y':
             return
-
-    print(digest)
-
+#  
 if __name__ == '__main__':
     main()
 
