@@ -3,7 +3,7 @@
 from enum import Enum
 from collections import OrderedDict
 from sys import stdout, stderr, exit
-from io import StringIO
+from io import StringIO, BytesIO
 from os import urandom
 import os.path
 from base64 import b32encode
@@ -98,7 +98,7 @@ mappers = {
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('filename', help='The rom file to disassemble')
+    parser.add_argument('filename', nargs='?', help='The rom file to disassemble')
     parser.add_argument('--info', action='store_true', 
             help='Print ROM info to stderr - do not disassemble.')
     parser.add_argument('-s', '--bank-size', type=int, default=-1,
@@ -117,13 +117,25 @@ def parse_args():
             'valid endings. Should be a comma-separated list of strings to '
             'look for in the final instruction')
     parser.add_argument('-n', '--no-sub-check', action='store_true',
-         help='Do not attempt to analyze subroutines for validity. Some '
-         'applications may intermix data and code in an odd way and confuse the '
-         'analysis, resulting in valid code interpreted as data. This output will '
-         'require much more cleanup')
-    parser.add_argument('-c', '--no-chr', action='store_true', help="Do not create chr file")
+             help='Do not attempt to analyze subroutines for validity. Some '
+             'applications may intermix data and code in an odd way and confuse '
+             'the analysis, resulting in valid code interpreted as data. This '
+             'output will require much more cleanup')
+    parser.add_argument(      '--no-header', action='store_true',
+            help= 'Indicates that the ROM has no header. In this case The mapper '
+            'number will need to be specified')
+    parser.add_argument('-p', '--prg-size', type=int, help='Specify the size of '
+            'the PRG ROM in kilobytes')
+    parser.add_argument('-c', '--chr-size', type=int, help='Specify the size of '
+            'the CHR ROM in kilobytes')
+    parser.add_argument(     '--mapper', type=int, help='Override the mapper '
+            'number from the header or specify the mapper for a headerless ROM. '
+            'This argument should be the INES mapper number.')
+    parser.add_argument('-r', '--no-chr', action='store_true', help="Do not create chr file")
     parser.add_argument('--stdout', action='store_true',
             help='Write all assembly code to stdout. CHR ROM is still saved to disk.')
+    parser.add_argument('--inlretro', action='store_true', help='Read the ROM from '
+            'an INLRetro dumper instead of a file')
     return parser.parse_args()
 
 class OpType(Enum):
@@ -650,10 +662,8 @@ class Subroutine:
         executing invalid code. The behavior of this method can be influenced by
         command line flags
         """
-#         if not (len(self.instructions) >= Subroutine.min_size and self.is_complete()):
-#             stderr.write(f"INVALID - length {len(self.instructions)}\n")
-#             stderr.write(str(self))
-        return len(self.instructions) >= Subroutine.min_size and self.is_complete()
+        return Subroutine.always_valid or (self.is_complete() and
+                len(self.instructions) >= Subroutine.min_size)
 
     def append(self, instruction:Instruction):
         """
@@ -805,18 +815,39 @@ class Header:
     """
     The ROM header
     """
-    def __init__(self, _bytes:bytes):
-        self._bytes = bytes(_bytes)
-        self.prg_size = _bytes[4] * 16 * 1024
-        self.chr_size = _bytes[5] *  8 * 1024
-        self.mapper = (_bytes[6] >> 4) | (_bytes[7] & 0xf0)
+    def __init__(self, _bytes:bytes=b'NES\x1a\0\0\0\0\0\0\0\0\0\0\0\0'):
+        self._bytes = bytearray(_bytes)
+        self._prg_size = _bytes[4] * 16
+        self._chr_size = _bytes[5] *  8
+        self._mapper = (_bytes[6] >> 4) | (_bytes[7] & 0xf0)
+
+    def mapper(self, number:int=None):
+        if number is None:
+            return self.mapper
+        self.mapper = number
+        self._bytes[6] &= 0xf
+        self._bytes[6] |= (number & 0xf) << 4
+        self._bytes[7] &= 0xf
+        self._bytes[7] |= number & 0xf0
+
+    def prg_size(self, size:int=None):
+        if size is None:
+            return self._prg_size
+        self._prg_size = size
+        self._bytes[4] = size // 16
+
+    def chr_size(self, size:int=None):
+        if size is None:
+            return self._chr_size
+        self._chr_size = size
+        self._bytes[5] = size // 8
 
     def __str__(self):
         buf = StringIO()
-        if self.mapper in mappers:
-            buf.write(f';  HEADER - MAPPER {self.mapper} - {mappers[self.mapper][0]}\n')
+        if self._mapper in mappers:
+            buf.write(f';  HEADER - MAPPER {self._mapper} - {mappers[self._mapper][0]}\n')
         else:
-            buf.write(f';  HEADER - MAPPER {self.mapper}\n')
+            buf.write(f';  HEADER - MAPPER {self._mapper}\n')
         buf.write( '        .db "NES", $1a\n')
         buf.write(f'        .db {self._bytes[ 4]:d}  ; PRG ROM banks\n')
         buf.write(f'        .db {self._bytes[ 5]:d}  ; CHR ROM banks\n')
@@ -831,7 +862,7 @@ class Header:
         return buf.read()
 
     def __bytes__(self):
-        return self._bytes
+        return bytes(self._bytes)
 
 def write_base_asm(header, out=stdout):
     out.write(f'{header}\n\n')
@@ -841,7 +872,6 @@ def write_base_asm(header, out=stdout):
     out.write('\n')
 
 def main():
-    args = parse_args()
     if args.no_sub_check:
         Subroutine.always_valid = True
     if args.sub_valid_end:
@@ -854,8 +884,34 @@ def main():
         exit(-1)
     bank_size *= 1024
     fixed_banks = args.fixed_banks
-    with open(args.filename, 'rb') as f:
-        header = Header(f.read(16))
+    if args.inlretro:
+        args.no_header = True
+        inlretro = __import__("inlretro")
+        buf = BytesIO()
+        inl = inlretro.INLRetro(args.mapper)
+        if not args.prg_size or not args.chr_size:
+            stderr.write("--prg-size and --chr-size must be specified")
+            exit(-1)
+        fail = inl.dump_full(buf, args.prg_size, args.chr_size)
+        buf.seek(0)
+#          if fail < 0:
+#              sys.exit(fail)
+    else:
+        if not args.filename:
+            stderr.write("Filename must be specified.")
+            exit(-1)
+        buf = open(args.filename, 'rb')
+    with buf as f:
+        if not args.no_header:
+            header = Header(f.read(16))
+        else:
+            header = Header()
+        if args.mapper:
+            header.mapper(args.mapper)
+        if args.prg_size:
+            header.prg_size(args.prg_size)
+        if args.chr_size:
+            header.chr_size(args.chr_size)
         if bank_size < 0:
             if header.mapper in mappers:
                 bank_size = mappers[header.mapper][1] * 1024
@@ -870,10 +926,10 @@ def main():
                 fixed_banks = mappers[header.mapper][2]
             else:
                 fixed_banks = 0
-        bank_count = header.prg_size // bank_size
-        stderr.write(f'ROM has {bank_count} PRG banks {header.prg_size//1024}KB.\n')
-        chr_rom_count = header.chr_size // (8 * 1024)
-        stderr.write(f'ROM has {chr_rom_count} CHR banks {header.chr_size//1024}KB.\n')
+        bank_count = header.prg_size() * 1024 // bank_size
+        stderr.write(f'ROM has {bank_count} PRG banks ({header.prg_size()}KB).\n')
+        chr_rom_count = header.chr_size() // 8
+        stderr.write(f'ROM has {chr_rom_count} CHR banks ({header.chr_size()}KB).\n')
         stderr.write(f'Mapper uses {fixed_banks} fixed banks.\n')
         fixed_bank_start = bank_count - fixed_banks
         if args.info:
@@ -915,6 +971,7 @@ def main():
         main_asm.close()
 
 if __name__ == '__main__':
+    args = parse_args()
     main()
 
 
