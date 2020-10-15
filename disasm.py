@@ -823,8 +823,8 @@ class Header:
 
     def mapper(self, number:int=None):
         if number is None:
-            return self.mapper
-        self.mapper = number
+            return self._mapper
+        self._mapper = number
         self._bytes[6] &= 0xf
         self._bytes[6] |= (number & 0xf) << 4
         self._bytes[7] &= 0xf
@@ -913,17 +913,17 @@ def main():
         if args.chr_size:
             header.chr_size(args.chr_size)
         if bank_size < 0:
-            if header.mapper in mappers:
-                bank_size = mappers[header.mapper][1] * 1024
-                stderr.write(f'ROM uses mapper {header.mapper} '
-                    f'- {mappers[header.mapper][0]}\n')
+            if header.mapper() in mappers:
+                bank_size = mappers[header.mapper()][1] * 1024
+                stderr.write(f'ROM uses mapper {header.mapper()} '
+                    f'- {mappers[header.mapper()][0]}\n')
         if bank_size < 0:
-            stderr.write(f'Unknown mapper {header.mapper}, please specify bank size.\n')
+            stderr.write(f'Unknown mapper {header.mapper()}, please specify bank size.\n')
             exit(-1)
         stderr.write(f'Bank size: {bank_size//1024}KB\n')
         if fixed_banks < 0:
-            if header.mapper in mappers:
-                fixed_banks = mappers[header.mapper][2]
+            if header.mapper() in mappers:
+                fixed_banks = mappers[header.mapper()][2]
             else:
                 fixed_banks = 0
         bank_count = header.prg_size() * 1024 // bank_size
