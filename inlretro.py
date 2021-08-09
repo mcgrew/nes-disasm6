@@ -5,6 +5,17 @@ from io import BytesIO
 from hashlib import md5
 
 from hashdb import known_md5
+from disasm import mappers
+
+class Singleton(type):
+    """
+    A metaclass used to create a Singleton class
+    """
+    _instances = {}
+    def __call__(cls, *args, **kwargs):
+        if cls not in cls._instances:
+            cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
+        return cls._instances[cls]
 
 try:
     import usb.core
@@ -191,68 +202,121 @@ class Buffer(Enum):
     BUFF_PAYLOAD6            = 0xF6
     BUFF_PAYLOAD7            = 0xF7
 
-mappers = {
-        # Name, Bank Size, PRG switch address, CHR switch address
-    0  : ('NROM', 32, 8, 0x0, 0x0),
-    1  : ('SxROM, MMC1', 16, 4, 0xffff, 0xbfff),
-    2  : ('UxROM', 16, 8, 0xffff, 0x0),
-#      3  : ('CNROM', 16),
-#      4  : ('TxROM, MMC3, MMC6', 8),
-#      5  : ('ExROM, MMC5 (Contains expansion sound)', 8),
-#      7  : ('AxROM', 32),
-#      9  : ('PxROM, MMC2', 8),
-#      10 : ('FxROM, MMC4', 16),
-#      11 : ('Color Dreams', 32),
-#      13 : ('CPROM', 16),
-#      15 : ('100-in-1 Contra Function 16 Multicart', 8),
-#      16 : ('Bandai EPROM (24C02)', -1),
-#      18 : ('Jaleco SS8806', 8),
-#      19 : ('Namco 163', 8),
-#      21 : ('VRC4a, VRC4c', 8),
-#      22 : ('VRC2a', 8),
-#      23 : ('VRC2b, VRC4e', 8),
-#      24 : ('VRC6a (Contains expansion sound)', 8),
-#      25 : ('VRC4b, VRC4d', 8),
-#      26 : ('VRC6b (Contains expansion sound)', 8),
-#      34 : ('BNROM, NINA-001', 32),
-#      64 : ('RAMBO-1 (MMC3 clone with extra features)', 8),
-#      66 : ('GxROM, MxROM', 32),
-#      68 : ('After Burner', 16),
-#      69 : ('FME-7, Sunsoft 5B', 8),
-#      71 : ('Camerica/Codemasters (Similar to UNROM)', 16),
-#      73 : ('VRC3', 16),
-#      74 : ('Pirate MMC3 derivative', 8),
-#      75 : ('VRC1', 8),
-#      76 : ('Namco 109 variant', 8),
-#      79 : ('NINA-03/NINA-06', 32),
-#      85 : ('VRC7', 8),
-#      86 : ('JALECO-JF-13', 32),
-#      94 : ('Senjou no Ookami', 16),
-#      105: ('NES-EVENT (Similar to MMC1)', 16),
-#      113: ('NINA-03/NINA-06??', 32),
-#      118: ('TxSROM, MMC3', 8),
-#      119: ('TQROM, MMC3', 8),
-#      159: ('Bandai EPROM', -1),
-#      166: ('SUBOR', 8),
-#      167: ('SUBOR', 8),
-#      180: ('Crazy Climber', 16), #Fixed first bank
-#      185: ('CNROM with protection diodes', 16),
-#      192: ('Pirate MMC3 derivative', 8),
-#      206: ('DxROM, Namco 118 / MIMIC-1', 8),
-#      210: ('Namco 175 and 340', 8),
-#      228: ('Action 52', 16),
-#      232: ('Camerica/Codemasters Quattro', 16),
-}
+#  0  : ('NROM', 32, 8, 0x0, 0x0),
+#  1  : ('SxROM, MMC1', 16, 4, 0xffff, 0xbfff),
+#  2  : ('UxROM', 16, 8, 0xffff, 0x0),
+#  3  : ('CNROM', 16),
+#  4  : ('TxROM, MMC3, MMC6', 8),
+#  5  : ('ExROM, MMC5 (Contains expansion sound)', 8),
+#  7  : ('AxROM', 32),
+#  9  : ('PxROM, MMC2', 8),
+#  10 : ('FxROM, MMC4', 16),
+#  11 : ('Color Dreams', 32),
+#  13 : ('CPROM', 16),
+#  15 : ('100-in-1 Contra Function 16 Multicart', 8),
+#  16 : ('Bandai EPROM (24C02)', -1),
+#  18 : ('Jaleco SS8806', 8),
+#  19 : ('Namco 163', 8),
+#  21 : ('VRC4a, VRC4c', 8),
+#  22 : ('VRC2a', 8),
+#  23 : ('VRC2b, VRC4e', 8),
+#  24 : ('VRC6a (Contains expansion sound)', 8),
+#  25 : ('VRC4b, VRC4d', 8),
+#  26 : ('VRC6b (Contains expansion sound)', 8),
+#  34 : ('BNROM, NINA-001', 32),
+#  64 : ('RAMBO-1 (MMC3 clone with extra features)', 8),
+#  66 : ('GxROM, MxROM', 32),
+#  68 : ('After Burner', 16),
+#  69 : ('FME-7, Sunsoft 5B', 8),
+#  71 : ('Camerica/Codemasters (Similar to UNROM)', 16),
+#  73 : ('VRC3', 16),
+#  74 : ('Pirate MMC3 derivative', 8),
+#  75 : ('VRC1', 8),
+#  76 : ('Namco 109 variant', 8),
+#  79 : ('NINA-03/NINA-06', 32),
+#  85 : ('VRC7', 8),
+#  86 : ('JALECO-JF-13', 32),
+#  94 : ('Senjou no Ookami', 16),
+#  105: ('NES-EVENT (Similar to MMC1)', 16),
+#  113: ('NINA-03/NINA-06??', 32),
+#  118: ('TxSROM, MMC3', 8),
+#  119: ('TQROM, MMC3', 8),
+#  159: ('Bandai EPROM', -1),
+#  166: ('SUBOR', 8),
+#  167: ('SUBOR', 8),
+#  180: ('Crazy Climber', 16), #Fixed first bank
+#  185: ('CNROM with protection diodes', 16),
+#  192: ('Pirate MMC3 derivative', 8),
+#  206: ('DxROM, Namco 118 / MIMIC-1', 8),
+#  210: ('Namco 175 and 340', 8),
+#  228: ('Action 52', 16),
+#  232: ('Camerica/Codemasters Quattro', 16),
 
-class INLRetro:
+class Mapper:
+    def __init__(self):
+        self.number = 0
+        self.name = type(self).__name__
+        self.bank_size = 32
+        self.chr_bank_size = 8
+        self.prg_addr = 0
+        self.chr_addr = 0
+        self._post_init()
+
+    def do(self, *args):
+        INLRetro().do(*args)
+
+    def _post_init(self):
+        pass
+
+    def set_prg_bank(self, bank):
+        pass
+
+    def set_chr_bank(self, bank):
+        pass
+
+class NROM(Mapper):
+    banks = (32, 8)
+
+class SxROM(Mapper):
+    banks = (16, 4)
+    def _post_init(self):
+        self.number = 1
+        self.bank_size = 16
+        self.chr_bank_size = 4
+        self.prg_addr = 0xffff
+        self.chr_addr = 0xbfff
+        # initialize the mapper chip
+        self.do(OpType.NES, NES.NES_MMC1_WR(0x1c), 0x9fff, 1)
+
+    def set_prg_bank(self, bank):
+        sys.stderr.write(f"Swapping in PRG bank {bank}...\n")
+        self.do(OpType.NES, NES.NES_MMC1_WR(bank), self.prg_addr, 1)
+
+    def set_chr_bank(self, bank):
+        sys.stderr.write(f"Swapping in CHR bank {bank}...\n")
+        self.do(OpType.NES, NES.NES_MMC1_WR(bank), self.chr_addr, 1)
+
+class UxROM(Mapper):
+    banks = (16, 8)
+    def _post_init(self):
+        self.number = 2
+        self.bank_size = 16
+        self.prg_addr = 0xffff
+
+    def set_prg_bank(self, bank):
+        sys.stderr.write(f"Swapping in PRG bank {bank}...\n")
+        self.do(OpType.NES, NES.NES_CPU_WR(bank), self.prg_addr, 1)
+
+class INLRetro(metaclass=Singleton):
+    mappers = {
+            0: NROM, 1: SxROM, 2: UxROM, 94: UxROM, 105: SxROM, 180:UxROM,
+    }
     def __init__(self, mapper:int=0):
-        if mapper not in mappers:
-            raise IndexError(f'Mapper {mapper} is not supported')
+        if mapper not in INLRetro.mappers:
+            raise IndexError(f'Mapper {mapper} is not yet supported')
         self.device = usb.core.find(idVendor=0x16c0, idProduct=0x05dc)
-        self.mapper = mapper
-        self.mapper_name, self.bank_size, self.chr_bank_size, self.prg_sw, self.chr_sw = \
-                mappers[mapper]
-        self.need_bank_swap = self.bank_size != 32
+        self.mapper = INLRetro.mappers[mapper]()
+        self.prg_bank_size, self.chr_bank_size = type(self.mapper).banks
 
         if self.device is None:
             raise IOError("Unable to locate INLretro device. Be sure it is connected properly.")
@@ -261,8 +325,8 @@ class INLRetro:
         self.device.set_configuration()
         self.do(OpType.IO, IO.IO_RESET(0x00), 0x0000, 1)
         self.do(OpType.IO, IO.NES_INIT(), 0x0000, 1)
-        self._mapper_init()
-        sys.stderr.write(f'Ready to read {self.mapper_name} board...\n')
+#          self._mapper_init()
+        sys.stderr.write(f'Ready to read {self.mapper.name} board...\n')
 
     def do(self, select:OpType, op_misc, addr, returnLength):
         response = self.device.ctrl_transfer(
@@ -275,20 +339,10 @@ class INLRetro:
             0xc0, OpType.BUFFER.value, Buffer.BUFF_PAYLOAD(), 0x0000, 128))
 
     def set_prg_bank(self, bank):
-        if self.prg_sw:
-            sys.stderr.write(f"Swapping in PRG bank {bank}...\n")
-            if self.mapper in (1, 105, 155):
-                self.do(OpType.NES, NES.NES_MMC1_WR(bank), self.prg_sw, 1)
-            else:
-                self.do(OpType.NES, NES.NES_CPU_WR(bank), self.prg_sw, 1)
+        self.mapper.set_prg_bank(bank)
 
     def set_chr_bank(self, bank):
-        if self.chr_sw:
-            sys.stderr.write(f"Swapping in CHR bank {bank}...\n")
-            if self.mapper in (1, 105, 155):
-                self.do(OpType.NES, NES.NES_MMC1_WR(bank), self.chr_sw, 1)
-            else:
-                self.do(OpType.NES, NES.NES_CPU_WR(bank), self.chr_sw, 1)
+        self.mapper.set_chr_bank(bank)
 
     def _init_dump(self, n_part_data_addr, n_mapvar_data_addr):
         self.do(OpType.OPER,   SET_OPERATION, 0x0001, 1)
@@ -314,16 +368,22 @@ class INLRetro:
             self.do(OpType.BUFFER,  0x0061, 0x0000, 3)
             io.write(self.get_buffer())
 
-    def _mapper_init(self):
-        if self.mapper in (1, 105, 155):
-            self.do(OpType.NES, NES.NES_MMC1_WR(0x1c), 0x9fff, 1)
+    def dump_prg_bank(self, io, bank, prg_size):
+        self.set_prg_bank(i)
+        self._init_prg_dump()
+        self._dump(io, self.prg_bank_size)
+
+    def dump_chr_bank(self, io, bank, chr_size):
+        self.set_chr_bank(i)
+        self._init_chr_dump()
+        self._dump(io, self.chr_bank_size)
 
     def dump_full(self, io, prg_size, chr_size):
         sys.stderr.write("Dumping PRG ROM...\n")
-        for i in range(prg_size // self.bank_size):
+        for i in range(prg_size // self.prg_bank_size):
             self.set_prg_bank(i)
             self._init_prg_dump()
-            self._dump(io, self.bank_size)
+            self._dump(io, self.prg_bank_size)
         sys.stderr.write("Dumping CHR ROM...\n")
         for i in range(chr_size // self.chr_bank_size):
             self.set_chr_bank(i)
@@ -362,18 +422,24 @@ def get_hash(buf):
     return _hash.hexdigest()
 
 def main():
-    MAPPER = 1
-    PRG_SIZE = 64
-    CHR_SIZE = 16
+    MAPPER = int(sys.argv[1])
+    PRG_SIZE = int(sys.argv[2])
+    CHR_SIZE = int(sys.argv[3])
+
+#      MAPPER = 2
+#      PRG_SIZE = 128
+#      CHR_SIZE = 0
+#  
+#      MAPPER = 1
+#      PRG_SIZE = 64
+#      CHR_SIZE = 16 
+
+#      MAPPER = 0
+#      PRG_SIZE = 32
+#      CHR_SIZE = 8
 
     inlretro = INLRetro(MAPPER)
     buf = BytesIO()
-#      buf.write(b'NES\x1a\x04\x02\x12\0\0\0\0\0\0\0\0\0')
-#      inlretro.dump_full(buf, PRG_SIZE, CHR_SIZE)
-#      with open('dump.nes', 'wb') as f:
-#          buf.seek(0)
-#          f.write(buf.read())
-    
 
     fail = inlretro.dump_and_verify(buf, PRG_SIZE, CHR_SIZE)
     if fail < 0:
@@ -381,8 +447,19 @@ def main():
     elif fail > 0:
         sys.stderr.write("Proceed anyway? (y/n) ")
         answer = input()
-        if answer[0].lower() != 'y':
+        if not answer.lower().startswith('y'):
             return
+
+    header = bytearray(b'NES\x1a\x00\x00\x00\0\0\0\0\0\0\0\0\0')
+    header[4] = PRG_SIZE // 16
+    header[5] = CHR_SIZE // 8
+    header[6] |= (MAPPER & 0xf) << 4
+    header[7] |= (MAPPER & 0xf0)
+
+    with open('dump.nes', 'wb') as f:
+        f.write(header)
+        buf.seek(0)
+        f.write(buf.read())
 #  
 if __name__ == '__main__':
     main()

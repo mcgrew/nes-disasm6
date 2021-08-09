@@ -50,7 +50,7 @@ mappers = {
     2  : ('UxROM', 16, 1),
     3  : ('CNROM', 16, 2),
     4  : ('TxROM, MMC3, MMC6', 8, 2),
-    5  : ('ExROM, MMC5 (Contains expansion sound)', 8, 0),
+    5  : ('ExROM, MMC5', 8, 0),
     7  : ('AxROM', 32, 0),
     9  : ('PxROM, MMC2', 8, 3),
     10 : ('FxROM, MMC4', 16, 1),
@@ -59,13 +59,13 @@ mappers = {
     15 : ('100-in-1 Contra Function 16 Multicart', 8, 0),
     16 : ('Bandai EPROM (24C02)', -1, 0), # Too many submappers
     18 : ('Jaleco SS8806', 8, 1),
-    19 : ('Namco 163 (Contains expansion sound)', 8, 1),
+    19 : ('Namco 163', 8, 1),
     21 : ('VRC4a, VRC4c', 8, 2),
     22 : ('VRC2a', 8, 2),
     23 : ('VRC2b, VRC4e', 8, 2),
-    24 : ('VRC6a (Contains expansion sound)', 8, 1),
+    24 : ('VRC6a', 8, 1),
     25 : ('VRC4b, VRC4d', 8, 2),
-    26 : ('VRC6b (Contains expansion sound)', 8, 1),
+    26 : ('VRC6b', 8, 1),
     34 : ('BNROM, NINA-001', 32, 0),
     64 : ('RAMBO-1 (MMC3 clone with extra features)', 8, 1),
     66 : ('GxROM, MxROM', 32, 0),
@@ -124,16 +124,16 @@ def parse_args():
     parser.add_argument(      '--no-header', action='store_true',
             help= 'Indicates that the ROM has no header. In this case The mapper '
             'number will need to be specified')
-    parser.add_argument('-p', '--prg-size', type=int, help='Specify the size of '
-            'the PRG ROM in kilobytes')
-    parser.add_argument('-c', '--chr-size', type=int, help='Specify the size of '
-            'the CHR ROM in kilobytes')
+    parser.add_argument('-p', '--prg-size', type=int, default=None, 
+            help='Specify the size of the PRG ROM in kilobytes')
+    parser.add_argument('-c', '--chr-size', type=int, default=None,
+            help='Specify the size of the CHR ROM in kilobytes')
     parser.add_argument(     '--mapper', type=int, help='Override the mapper '
             'number from the header or specify the mapper for a headerless ROM. '
             'This argument should be the INES mapper number.')
     parser.add_argument('-r', '--no-chr', action='store_true', help="Do not create chr file")
     parser.add_argument('--stdout', action='store_true',
-            help='Write all assembly code to stdout. CHR ROM is still saved to disk.')
+            help='Write all assembly code to stdout. A CHR ROM file is not created.')
     parser.add_argument('--inlretro', action='store_true', help='Read the ROM from '
             'an INLRetro dumper instead of a file')
     return parser.parse_args()
@@ -889,13 +889,13 @@ def main():
         inlretro = __import__("inlretro")
         buf = BytesIO()
         inl = inlretro.INLRetro(args.mapper)
-        if not args.prg_size or not args.chr_size:
+        if args.prg_size is None or args.chr_size is None:
             stderr.write("--prg-size and --chr-size must be specified")
             exit(-1)
-        fail = inl.dump_full(buf, args.prg_size, args.chr_size)
+        fail = inl.dump_and_verify(buf, args.prg_size, args.chr_size)
         buf.seek(0)
-#          if fail < 0:
-#              sys.exit(fail)
+        if fail < 0:
+            sys.exit(fail)
     else:
         if not args.filename:
             stderr.write("Filename must be specified.")
@@ -963,7 +963,7 @@ def main():
             with open(f'bank_{b.number:02d}.asm', 'w') as asm:
                 asm.write(str(b))
                 main_asm.write(f'        .include bank_{b.number:02d}.asm\n')
-    if not args.no_chr and header.chr_size:
+    if not args.no_chr and not args.stdout and header.chr_size:
         with open('chr_rom.bin', 'wb') as chr_rom:
             chr_rom.write(incbin)
         main_asm.write('        .incbin chr_rom.bin\n')
