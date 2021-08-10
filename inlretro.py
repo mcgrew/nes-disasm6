@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import sys
+import math
 from enum import Enum
 from io import BytesIO
 from hashlib import md5
 
 from hashdb import known_md5
-from disasm import mappers
 
 class Singleton(type):
     """
@@ -202,56 +202,6 @@ class Buffer(Enum):
     BUFF_PAYLOAD6            = 0xF6
     BUFF_PAYLOAD7            = 0xF7
 
-#  0  : ('NROM', 32, 8, 0x0, 0x0),
-#  1  : ('SxROM, MMC1', 16, 4, 0xffff, 0xbfff),
-#  2  : ('UxROM', 16, 8, 0xffff, 0x0),
-#  3  : ('CNROM', 16),
-#  4  : ('TxROM, MMC3, MMC6', 8),
-#  5  : ('ExROM, MMC5 (Contains expansion sound)', 8),
-#  7  : ('AxROM', 32),
-#  9  : ('PxROM, MMC2', 8),
-#  10 : ('FxROM, MMC4', 16),
-#  11 : ('Color Dreams', 32),
-#  13 : ('CPROM', 16),
-#  15 : ('100-in-1 Contra Function 16 Multicart', 8),
-#  16 : ('Bandai EPROM (24C02)', -1),
-#  18 : ('Jaleco SS8806', 8),
-#  19 : ('Namco 163', 8),
-#  21 : ('VRC4a, VRC4c', 8),
-#  22 : ('VRC2a', 8),
-#  23 : ('VRC2b, VRC4e', 8),
-#  24 : ('VRC6a (Contains expansion sound)', 8),
-#  25 : ('VRC4b, VRC4d', 8),
-#  26 : ('VRC6b (Contains expansion sound)', 8),
-#  34 : ('BNROM, NINA-001', 32),
-#  64 : ('RAMBO-1 (MMC3 clone with extra features)', 8),
-#  66 : ('GxROM, MxROM', 32),
-#  68 : ('After Burner', 16),
-#  69 : ('FME-7, Sunsoft 5B', 8),
-#  71 : ('Camerica/Codemasters (Similar to UNROM)', 16),
-#  73 : ('VRC3', 16),
-#  74 : ('Pirate MMC3 derivative', 8),
-#  75 : ('VRC1', 8),
-#  76 : ('Namco 109 variant', 8),
-#  79 : ('NINA-03/NINA-06', 32),
-#  85 : ('VRC7', 8),
-#  86 : ('JALECO-JF-13', 32),
-#  94 : ('Senjou no Ookami', 16),
-#  105: ('NES-EVENT (Similar to MMC1)', 16),
-#  113: ('NINA-03/NINA-06??', 32),
-#  118: ('TxSROM, MMC3', 8),
-#  119: ('TQROM, MMC3', 8),
-#  159: ('Bandai EPROM', -1),
-#  166: ('SUBOR', 8),
-#  167: ('SUBOR', 8),
-#  180: ('Crazy Climber', 16), #Fixed first bank
-#  185: ('CNROM with protection diodes', 16),
-#  192: ('Pirate MMC3 derivative', 8),
-#  206: ('DxROM, Namco 118 / MIMIC-1', 8),
-#  210: ('Namco 175 and 340', 8),
-#  228: ('Action 52', 16),
-#  232: ('Camerica/Codemasters Quattro', 16),
-
 class Mapper:
     def __init__(self):
         self.number = 0
@@ -280,9 +230,6 @@ class NROM(Mapper):
 class SxROM(Mapper):
     banks = (16, 4)
     def _post_init(self):
-        self.number = 1
-        self.bank_size = 16
-        self.chr_bank_size = 4
         self.prg_addr = 0xffff
         self.chr_addr = 0xbfff
         # initialize the mapper chip
@@ -299,21 +246,69 @@ class SxROM(Mapper):
 class UxROM(Mapper):
     banks = (16, 8)
     def _post_init(self):
-        self.number = 2
-        self.bank_size = 16
         self.prg_addr = 0xffff
 
     def set_prg_bank(self, bank):
         sys.stderr.write(f"Swapping in PRG bank {bank}...\n")
         self.do(OpType.NES, NES.NES_CPU_WR(bank), self.prg_addr, 1)
 
+class CNROM(Mapper):
+    banks = (32, 8)
+    def _post_init(self):
+        self.chr_addr = 0xffff
+
+    def set_chr_bank(self, bank):
+        sys.stderr.write(f"Swapping in CHR bank {bank}...\n")
+        self.do(OpType.NES, NES.NES_CPU_WR(bank), self.chr_addr, 1)
+
+class TxROM(Mapper):
+    banks = (8, 1)
+
+    def set_prg_bank(self, bank):
+        sys.stderr.write(f"Swapping in PRG bank {bank}...\n")
+        self.do(OpType.NES, NES.NES_CPU_WR(0b10000110), 0x9ffe, 1)
+        self.do(OpType.NES, NES.NES_CPU_WR(bank), 0x9fff, 1)
+
+    def set_chr_bank(self, bank):
+        sys.stderr.write(f"Swapping in CHR bank {bank}...\n")
+        self.do(OpType.NES, NES.NES_CPU_WR(0b10000010), 0x9ffe, 1)
+        self.do(OpType.NES, NES.NES_CPU_WR(bank), 0x9fff, 1)
+
+class ExROM(Mapper):
+    banks = (8, 1)
+    def set_prg_bank(self, bank):
+        sys.stderr.write(f"Swapping in PRG bank {bank}...\n")
+        self.do(OpType.NES, NES.NES_CPU_WR(3), 0x5100, 1) # PRG Mode
+        # high bit determines RAM or ROM
+        self.do(OpType.NES, NES.NES_CPU_WR(0b10000000 | bank), 0x5114, 1)
+
+    def set_chr_bank(self, bank):
+        sys.stderr.write(f"Swapping in CHR bank {bank}...\n")
+        self.do(OpType.NES, NES.NES_CPU_WR(3), 0x5101, 1) # CHR Mode
+        self.do(OpType.NES, NES.NES_CPU_WR(bank >> 8 ), 0x5130, 1)
+        self.do(OpType.NES, NES.NES_CPU_WR(bank & 0xff), 0x5120, 1)
+
 class INLRetro(metaclass=Singleton):
     mappers = {
-            0: NROM, 1: SxROM, 2: UxROM, 94: UxROM, 105: SxROM, 180:UxROM,
+            0  : NROM,
+            1  : SxROM,
+            2  : UxROM,
+            3  : CNROM,
+            4  : TxROM,
+            5  : ExROM,
+            64 : TxROM,
+            94 : UxROM,
+            105: SxROM,
+            118: TxROM,
+            119: TxROM,
+            180: UxROM,
+            185: CNROM, 
     }
-    def __init__(self, mapper:int=0):
+    def __init__(self, mapper:int=0, prg_size=None, chr_size=None):
         if mapper not in INLRetro.mappers:
             raise IndexError(f'Mapper {mapper} is not yet supported')
+        self.prg_size = prg_size
+        self.chr_size = chr_size
         self.device = usb.core.find(idVendor=0x16c0, idProduct=0x05dc)
         self.mapper = INLRetro.mappers[mapper]()
         self.prg_bank_size, self.chr_bank_size = type(self.mapper).banks
@@ -325,7 +320,6 @@ class INLRetro(metaclass=Singleton):
         self.device.set_configuration()
         self.do(OpType.IO, IO.IO_RESET(0x00), 0x0000, 1)
         self.do(OpType.IO, IO.NES_INIT(), 0x0000, 1)
-#          self._mapper_init()
         sys.stderr.write(f'Ready to read {self.mapper.name} board...\n')
 
     def do(self, select:OpType, op_misc, addr, returnLength):
@@ -368,30 +362,62 @@ class INLRetro(metaclass=Singleton):
             self.do(OpType.BUFFER,  0x0061, 0x0000, 3)
             io.write(self.get_buffer())
 
-    def dump_prg_bank(self, io, bank, prg_size):
-        self.set_prg_bank(i)
+    def dump_prg_bank(self, bank):
+        buf = BytesIO()
+        self.set_prg_bank(bank)
         self._init_prg_dump()
-        self._dump(io, self.prg_bank_size)
+        self._dump(buf, self.prg_bank_size)
+        return buf
 
-    def dump_chr_bank(self, io, bank, chr_size):
-        self.set_chr_bank(i)
+    def dump_chr_bank(self, bank):
+        buf = BytesIO()
+        self.set_chr_bank(bank)
         self._init_chr_dump()
-        self._dump(io, self.chr_bank_size)
+        self._dump(buf, self.chr_bank_size)
+        return buf
 
-    def dump_full(self, io, prg_size, chr_size):
+    def dump_full(self, io):
+        bank_hashes = set()
+
+        if self.prg_size is None:
+            prg_bank_count = 256
+        else:
+            prg_bank_count = self.prg_size // self.prg_bank_size
         sys.stderr.write("Dumping PRG ROM...\n")
-        for i in range(prg_size // self.prg_bank_size):
-            self.set_prg_bank(i)
-            self._init_prg_dump()
-            self._dump(io, self.prg_bank_size)
-        sys.stderr.write("Dumping CHR ROM...\n")
-        for i in range(chr_size // self.chr_bank_size):
-            self.set_chr_bank(i)
-            self._init_chr_dump()
-            self._dump(io, self.chr_bank_size)
+        for i in range(prg_bank_count):
+            buf = self.dump_prg_bank(i)
+            bank_hash = get_hash(buf, 0, buf.tell())
+            # The number of banks should always be a power of 2.
+            if not self.prg_size and is_power_of_two(i) and bank_hash in bank_hashes:
+                sys.stderr.write("Duplicated bank, stopping PRG dump...\n")
+                self.prg_size = (i) * self.prg_bank_size
+                break
+            bank_hashes.add(bank_hash)
+            buf.seek(0)
+            io.write(buf.read())
 
-    def dump_and_verify(self, io, prg_size, chr_size):
-        self.dump_full(io, prg_size, chr_size)
+        if self.chr_size == 0:
+            return
+        elif self.chr_size is None:
+            chr_bank_count = 1024
+        else:
+            chr_bank_count = self.chr_size // self.chr_bank_size
+        bank_hashes.clear()
+        sys.stderr.write("Dumping CHR ROM...\n")
+        for i in range(chr_bank_count):
+            buf = self.dump_chr_bank(i)
+            bank_hash = get_hash(buf, 0, buf.tell())
+            # The number of banks should always be a power of 2.
+            if not self.chr_size and is_power_of_two(i) and bank_hash in bank_hashes:
+                sys.stderr.write("Duplicated bank - stopping CHR dump...\n")
+                self.chr_size = (i) * self.chr_bank_size
+                break
+            bank_hashes.add(bank_hash)
+            buf.seek(0)
+            io.write(buf.read())
+
+    def dump_and_verify(self, io):
+        self.dump_full(io)
         digest = get_hash(io)
         sys.stderr.write(f'Hash: {digest}\n')
         if digest in known_md5:
@@ -400,26 +426,35 @@ class INLRetro(metaclass=Singleton):
             sys.stderr.write("Did not match a known hash, rereading...\n")
             last_digest = digest
             buf = BytesIO()
-            self.dump_full(buf, prg_size, chr_size)
+            self.dump_full(buf)
             digest = get_hash(buf)
             sys.stderr.write(f'Hash: {digest}\n')
             if digest == last_digest:
-                sys.stderr.write("Hash matches previous read but not a known hash.\n")
-                sys.stderr.write("This likely indicates the cartridge is not "
-                    "seated properly.\n")
-                return 1
+                raise UnknownHashError("Hash matches previous read but not a known hash. "
+                        "This likely indicates the cartridge is not seated properly.")
             else:
-                sys.stderr.write("Second read did not match the first!\n")
-                sys.stderr.write("Please make sure the cartridge is seated "
-                    "properly and try again.\n")
-                return -1
-        return 0
+                raise HashMismatchError("Second read did not match the first! "
+                        "Please make sure the cartridge is seated properly and try again.")
 
-def get_hash(buf):
-    buf.seek(0)
-    _hash = md5()
-    _hash.update(buf.read())
-    return _hash.hexdigest()
+class UnknownHashError(RuntimeError):
+    pass
+
+class HashMismatchError(RuntimeError):
+    pass
+
+def get_hash(buf, start=0, end=None):
+    pos = buf.tell()
+    if end is None:
+        buf.seek(0, 2)
+        end = buf.tell()
+    buf.seek(start)
+    hash_ = md5()
+    hash_.update(buf.read(end - start))
+    buf.seek(pos)
+    return hash_.hexdigest()
+
+def is_power_of_two(number):
+    return bool(number) and math.log(number, 2).is_integer()
 
 def main():
     MAPPER = int(sys.argv[1])
@@ -438,10 +473,10 @@ def main():
 #      PRG_SIZE = 32
 #      CHR_SIZE = 8
 
-    inlretro = INLRetro(MAPPER)
+    inlretro = INLRetro(MAPPER, PRG_SIZE, CHR_SIZE)
     buf = BytesIO()
 
-    fail = inlretro.dump_and_verify(buf, PRG_SIZE, CHR_SIZE)
+    fail = inlretro.dump_and_verify(buf)
     if fail < 0:
         return
     elif fail > 0:

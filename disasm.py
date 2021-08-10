@@ -885,17 +885,22 @@ def main():
     bank_size *= 1024
     fixed_banks = args.fixed_banks
     if args.inlretro:
+        if not args.filename:
+            args.filename = 'dump'
         args.no_header = True
         inlretro = __import__("inlretro")
         buf = BytesIO()
-        inl = inlretro.INLRetro(args.mapper)
-        if args.prg_size is None or args.chr_size is None:
-            stderr.write("--prg-size and --chr-size must be specified")
-            exit(-1)
-        fail = inl.dump_and_verify(buf, args.prg_size, args.chr_size)
+        inl = inlretro.INLRetro(args.mapper, args.prg_size, args.chr_size)
+        try:
+            inl.dump_and_verify(buf)
+        except inlretro.HashMismatchError as e:
+            stderr.write(f'{e}\n')
+            sys.exit(-1)
+        except inlretro.UnknownHashError as e:
+            stderr.write(f'{e}\n')
         buf.seek(0)
-        if fail < 0:
-            sys.exit(fail)
+        args.prg_size = inl.prg_size
+        args.chr_size = inl.chr_size
     else:
         if not args.filename:
             stderr.write("Filename must be specified.")
