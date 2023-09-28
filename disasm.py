@@ -134,8 +134,16 @@ def parse_args():
     parser.add_argument('-r', '--no-chr', action='store_true', help="Do not create chr file")
     parser.add_argument('--stdout', action='store_true',
             help='Write all assembly code to stdout. A CHR ROM file is not created.')
-    parser.add_argument('--inlretro', action='store_true', help='Read the ROM from '
-            'an INLRetro dumper instead of a file')
+    parser.add_argument('--dq-brk', action='store_true',
+            help='The Dragon Quest games do weird things with brk instructions '
+                'which makes them consume 3 bytes instead of 2. This option '
+                'will make disassembling those binaries more sensible.')
+    try:
+        inlretro = __import__("inlretro")
+        parser.add_argument('--inlretro', action='store_true',
+                help='Read the ROM from  an INLRetro dumper instead of a file')
+    except ImportError:
+        pass
     return parser.parse_args()
 
 class OpType(Enum):
@@ -151,7 +159,8 @@ class Bank:
     """
     A ROM bank.
     """
-    def __init__(self, number:int, base:int, _bytes:bytes, fixed:int=0):
+    def __init__(self, number:int, base:int, _bytes:bytes, fixed:int=0, 
+                 dq_brk:bool = False):
         """
         Creates a new bank.
 
@@ -167,6 +176,7 @@ class Bank:
         self.number = number
         self.components = []
         self._fixed = fixed
+        self.dq_brk = dq_brk
         self._disassemble(_bytes[:-6], _bytes[-6:])
         i = 0
         if not base:
@@ -184,7 +194,8 @@ class Bank:
         self.components.clear()
         i = 0
         while i < len(bank_bytes):
-            instr = Instruction(i + self.base, self, bank_bytes[i:i+3])
+            instr = Instruction(i + self.base, self, bank_bytes[i:i+3], 
+                                self.dq_brk)
             if instr:
                 if not len(self.components):
                     self.components.append(Subroutine(self, instr.position))
@@ -311,7 +322,8 @@ class Instruction:
     """
     A single assembly instruction.
     """
-    def __init__(self, position:int, bank:Bank, _bytes:bytes):
+    def __init__(self, position:int, bank:Bank, _bytes:bytes,
+                 dq_brk:bool = False):
         """
         Creates a new Instruction.
 
@@ -319,10 +331,14 @@ class Instruction:
         :param bank: The bank which contains this instruction.
         :param _bytes: The bytes which make up this instruction. Any extra bytes
             will be discarded.
+        :param dq_brk: Enix does weird things with breaks which makes them
+            effectively 3 bytes instead of 2. This will make disassembling
+            those binaries more sensible.
         """
         self.position = position
         self.opcode = _bytes[0]
         self.bank = bank
+        self.dq_brk = dq_brk
         self._bytes = bytes(_bytes)
         b1 = _bytes[1] if len(_bytes) > 1 else None
         b2 = _bytes[2] if len(_bytes) > 2 else None
@@ -341,7 +357,7 @@ class Instruction:
         elif b2 is not None and self.opcode == 0x00:
             self.type = OpType.IMPLIED
             self.op = 'brk'
-            self._size = 2
+            self._size = 2 if not dq_brk else 3
 
         elif self.implied(self.opcode):
             self.type = OpType.IMPLIED
@@ -561,9 +577,14 @@ class Instruction:
             buf.write(' ' * 25)
             buf.write(f'; {source_pos:05X}:  00\n')
             buf.write(' ' * 12)
-            buf.write(f'hex {self._bytes[1]:02x}')
-            buf.write(' ' * 22)
-            buf.write(f'; {source_pos+1:05X}:  {self._bytes[1]:02x}\n')
+            if not self.dq_brk:
+                buf.write(f'hex {b1:02x}')
+                buf.write(' ' * 22)
+                buf.write(f'; {source_pos+1:05X}:  {b1:02x}\n')
+            else:
+                buf.write(f'hex {b1:02x} {b2:02x}')
+                buf.write(' ' * 19)
+                buf.write(f'; {source_pos+1:05X}:  {b1:02x} {b2:02x}\n')
             buf.seek(0)
             return buf.read()
 
@@ -879,12 +900,12 @@ def main():
     Subroutine.min_size = args.min_sub_size
     banks = []
     bank_size = args.bank_size
-    if bank_size not in (-1, 8, 16, 32):
-        stderr.write('Invalid bank size. Should be either 8, 16, or 32.')
+    if bank_size not in (-1, 4, 8, 16, 32):
+        stderr.write('Invalid bank size. Should be either 4, 8, 16, or 32.')
         exit(-1)
     bank_size *= 1024
     fixed_banks = args.fixed_banks
-    if args.inlretro:
+    if hasattr(args, 'inlretro') and args.inlretro:
         if not args.filename:
             args.filename = 'dump'
         args.no_header = True
@@ -949,7 +970,7 @@ def main():
                 base = 0x8000
             elif i >= fixed_bank_start:
                 base = 0x10000 - (bank_size * (bank_count - i))
-            banks.append(Bank(i, base, rom, fixed_banks))
+            banks.append(Bank(i, base, rom, fixed_banks, args.dq_brk))
         incbin = f.read()
     main_asm = stdout
     if args.bank >= 0:
